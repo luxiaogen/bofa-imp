@@ -120,6 +120,7 @@ class BaseLearner(object):
         y_pred, y_true = self._eval_cnn(self.test_loader)
         if len(y_pred) == 1:
             cnn_accy = self._evaluate(y_pred[0], y_true)
+            cnn_accy.update(self._evaluate_task(y_pred[0], y_true))
 
             if hasattr(self, "_class_means"):
                 y_pred, y_true = self._eval_nme(self.test_loader, self._class_means)
@@ -139,7 +140,14 @@ class BaseLearner(object):
         else:
             cnn_accy = []
             for y_pred_i in y_pred:
-                cnn_accy.append(self._evaluate(y_pred_i, y_true))
+                # cnn_accy.append(self._evaluate(y_pred_i, y_true))
+                ##################4.28 add
+                ret = self._evaluate(y_pred_i, y_true) # {'grouped': {'00-09': 97.7, 'harmonic': 0.0, 'new': 97.7, 'old': 0, 'total': 97.7}, 'top1': 97.7}
+                ret.update(self._evaluate_task_acc(y_pred_i, y_true))
+                cnn_accy.append(ret)
+                ###################4.28 add
+
+
             y_pred, y_true = self._eval_zero_shot()
             zs_acc = self._evaluate_zs(y_pred, y_true)
             zs_seen, zs_unseen, zs_harmonic, zs_total = zs_acc["grouped"]["old"], zs_acc["grouped"]["new"], zs_acc["grouped"]["harmonic"], zs_acc["grouped"][
@@ -207,7 +215,18 @@ class BaseLearner(object):
         return np.around(tensor2numpy(correct) * 100 / total, decimals=2)
 
     def _eval_cnn(self, loader):
+        """
+            推理函数
+
+            输入:
+                test_loader: 测试数据加载器
+
+            输出:
+                y_pred: 预测结果 [N]
+                y_true: 真实标签 [N]
+        """
         self._network.eval()
+        # 对每个 batch 进行推理
         y_pred, y_true = [], []
         for _, (_, inputs, targets) in enumerate(loader):
             inputs = inputs.to(self._device)
@@ -224,6 +243,7 @@ class BaseLearner(object):
         return np.concatenate(y_pred), np.concatenate(y_true)  # [N, topk]
 
     def _eval_nme(self, loader, class_means):
+
         self._network.eval()
         vectors, y_true = self._extract_vectors(loader)
         vectors = (vectors.T / (np.linalg.norm(vectors.T, axis=0) + EPSILON)).T
@@ -453,3 +473,28 @@ class BaseLearner(object):
             _class_means[class_idx, :] = mean
 
         self._class_means = _class_means
+
+    ####### add-4.29任务准确率 start#######
+    def _evaluate_task_acc(self, y_pred, y_true):
+        # if not hasattr(self, "label2task") or len(self.label2task) == 0:
+        #     return {}
+        #
+        # if len(y_pred.shape) > 1:
+        #     y_pred = y_pred[:, 0]
+
+        pred_task = np.array([self.label2task[int(p)] for p in y_pred])
+        true_task = np.array([self.label2task[int(t)] for t in y_true])
+        # 计算整体任务准确率
+        ret = {}
+        ret["task_top1"] = np.around((pred_task == true_task).sum() * 100 / len(y_true), decimals=2)
+        # 计算每个任务的准确率
+        grouped = {}
+        for task_id in np.unique(true_task):
+            idxes = np.where(true_task == task_id)[0]
+            grouped[f"task_{int(task_id)}"] = np.around(
+                (pred_task[idxes] == true_task[idxes]).sum() * 100 / len(idxes),
+                decimals=2,
+            ) # 计算每个任务的准确率
+        ret["task_grouped"] = grouped
+        return ret
+    ####### add-4.29任务准确率 end#######

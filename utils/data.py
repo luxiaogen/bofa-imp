@@ -9,7 +9,9 @@ class iData(object):
     common_trsf = []
     class_order = None
 
-DATA_ROOT_PATH = os.path.join(get_data_root_path(), "newdata")
+# DATA_ROOT_PATH = os.path.join(get_data_root_path(), "newdata")
+DATA_ROOT_PATH = "/home/shengqin/ds_and_pretrain/ds"
+
 
 class iCIFAR10(iData):
     use_path = False
@@ -59,8 +61,8 @@ class iCIFAR100(iData):
 
     def download_data(self):
         data_path = os.path.join(DATA_ROOT_PATH, "cifar100")
-        train_dataset = datasets.cifar.CIFAR100(data_path, train=True, download=False)
-        test_dataset = datasets.cifar.CIFAR100(data_path, train=False, download=False)
+        train_dataset = datasets.cifar.CIFAR100(data_path, train=True, download=True)
+        test_dataset = datasets.cifar.CIFAR100(data_path, train=False, download=True)
         self.train_data, self.train_targets = train_dataset.data, np.array(
             train_dataset.targets
         )
@@ -113,8 +115,8 @@ class iCIFAR224(iData):
 
     def download_data(self):
         data_path = os.path.join(DATA_ROOT_PATH, "cifar100")
-        train_dataset = datasets.cifar.CIFAR100(data_path, train=True, download=False)
-        test_dataset = datasets.cifar.CIFAR100(data_path, train=False, download=False)
+        train_dataset = datasets.cifar.CIFAR100(data_path, train=True, download=True)
+        test_dataset = datasets.cifar.CIFAR100(data_path, train=False, download=True)
         self.train_data, self.train_targets = train_dataset.data, np.array(
             train_dataset.targets
         )
@@ -193,8 +195,8 @@ class iImageNetR(iData):
 
     def download_data(self):
         # assert 0, "You should specify the folder of your dataset"
-        train_dir = os.path.join(DATA_ROOT_PATH,"imagenet-r/train/")
-        test_dir = os.path.join(DATA_ROOT_PATH,"imagenet-r/test/")
+        train_dir = os.path.join(DATA_ROOT_PATH,"imagenet-r-split/train/")
+        test_dir = os.path.join(DATA_ROOT_PATH,"imagenet-r-split/val/")
 
         train_dset = datasets.ImageFolder(train_dir)
         test_dset = datasets.ImageFolder(test_dir)

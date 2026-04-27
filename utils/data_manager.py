@@ -8,7 +8,16 @@ from utils.data import iCIFAR10, iCIFAR100, iImageNet100, iImageNet1000, iCIFAR2
     Aircraft, UCF101, StanfordCars, SUN
 import json
 
-
+"""
+    train_dataset: 包含当前任务的图像和标签
+    - images: [N, 3, 224, 224]  # N 是样本数
+    - labels: [N]               # 类别标签
+    train_loader: DataLoader
+        - batch_size: 128
+        - 每个 batch: (_, inputs, targets)
+            - inputs: [128, 3, 224, 224]
+            - targets: [128]
+"""
 class DataManager(object):
     def __init__(self, dataset_name, shuffle, seed, init_cls, increment, train_trans=None, test_trans=None):
 

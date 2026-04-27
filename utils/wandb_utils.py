@@ -1,5 +1,7 @@
 import socket
 import os
+
+
 def get_local_ip():
     try:
         # 创建一个UDP socket
@@ -12,8 +14,12 @@ def get_local_ip():
         s.close()
     return local_ip
 
+
 def get_root_path():
     host_name = socket.gethostname()
+    # 添加默认路径，避免报错
+    path = os.getcwd()  # 使用当前工作目录作为默认路径
+
     if host_name == "LAMDA1-GPU-K80-145":
         path = "/home/yehj"
     elif host_name == "lan-Super-Server":
@@ -32,13 +38,16 @@ def get_root_path():
         path = "/home/lil"
     elif host_name == "amax-Super-Server":
         path = "/user/lil/ss"
-    else:
-        raise NotImplementedError("No that server:{}".format(host_name))
+    # else:
+    #     raise NotImplementedError("No that server:{}".format(host_name))
     return host_name, path
 
 
 def get_data_root_path():
     host_name = socket.gethostname()
+    # 添加默认路径，避免报错
+    path = os.getcwd()  # 使用当前工作目录作为默认路径
+
     if host_name == "LAMDA1-GPU-K80-145":
         path = "/home/yehj"
     elif host_name == "lan-Super-Server":
@@ -46,7 +55,7 @@ def get_data_root_path():
     elif host_name == "LAMDA1-GPU2":
         path = "/user/lan"
     elif host_name == "amax":
-        local_ip  = get_local_ip()
+        local_ip = get_local_ip()
         if local_ip == "210.28.134.233":
             path = "/data/lil"
         else:
@@ -57,8 +66,8 @@ def get_data_root_path():
         path = "/home/lil/share"
     elif host_name == "amax-Super-Server":
         path = "/user/lil/share"
-    else:
-        raise NotImplementedError("No that server:{}".format(host_name))
+    # else:
+    #     raise NotImplementedError("No that server:{}".format(host_name))
     return path
 
 
