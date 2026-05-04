@@ -125,6 +125,7 @@ class BofaAdapter(BaseNet):
             shared_rank=args.get("shared_rank", -1),
             shared_lr_scale=args.get("shared_lr_scale", 0.1),
             ####################add-4.28-end########################
+            first_task_rank=args.get("first_task_rank", -1),
         )
         ####################add-4.27-end########################
         self.use_up_cov = args["use_up_cov"]

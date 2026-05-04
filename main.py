@@ -73,6 +73,8 @@ def setup_parser():
     parser.add_argument("--shared_rank", type=int, default=-1, help="Shared-core rank for fixed_svd_shared_core.")
     parser.add_argument("--shared_lr_scale", type=float, default=0.1,help="Learning-rate scale for shared-core updates.")
     ####################add-4.28-end########################
+    parser.add_argument("--first_task_rank", type=int, default=-1,
+                        help="Override rank for task 0 when basis_alloc=front_loaded_block.")
     return parser
 
 

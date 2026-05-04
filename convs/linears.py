@@ -127,6 +127,7 @@ class OLF(nn.Module):
             shared_rank=-1,
             shared_lr_scale=0.1,
             ####################add-4.28-end########################
+            first_task_rank=-1, # add-5.3
     ):
         super().__init__()
         self.in_features = in_features # 768
@@ -140,12 +141,13 @@ class OLF(nn.Module):
         self.current_rank = 0
         self.subspace_policy = subspace_policy # 子空间的策略
         self.basis_seed = basis_seed # 1993
-        self.basis_alloc = basis_alloc # disjoint_block 每个任务使用互不重叠的基底子空间 任务独立，避免遗忘
+        self.basis_alloc = basis_alloc # disjoint_block 每个任务使用互不重叠的基底子空间 任务独立，避免遗忘 | 'front_loaded_block'
         self.basis_eps = basis_eps # 0.001 修复接近零的特征值，避免数值不稳定
         self.basis_zero_fix = basis_zero_fix # nero_zero_only 特征值修复策略
         ####################add-4.28-start######################
         self.shared_lr_scale = shared_lr_scale # 0.1
         ####################add-4.28-end########################
+        self.first_task_rank = first_task_rank # add-5.3
         self.total_tasks = None
         self.fixed_basis_fixes = 0 # 记录修复的特征值数量
         self.active_slice = None
@@ -153,13 +155,14 @@ class OLF(nn.Module):
             #"cuda" if torch.cuda.is_available() else "cpu")
         W0_torch = W0_torch.cuda()
         ####################add-4.27-end########################
+        self.active_rank = rank # add-5.3
 
         self.register_buffer('W0', W0_torch.clone().detach())
 
         ####################add-4.28-start######################
         if self.subspace_policy == "fixed_svd_shared_core":
-            self.shared_rank = rank // 2 if shared_rank is None or shared_rank < 0 else shared_rank # 32
-            self.private_rank = rank - self.shared_rank # 32
+            self.shared_rank = rank // 2 if shared_rank is None or shared_rank < 0 else shared_rank # 32 | 468 共享空间
+            self.private_rank = rank - self.shared_rank # 32 | 30 私有空间
             # if self.shared_rank <= 0 or self.private_rank <= 0:
             #     raise ValueError(
             #         f"fixed_svd_shared_core requires 0 < shared_rank < rank, got shared_rank={self.shared_rank}, rank={rank}."
@@ -168,13 +171,16 @@ class OLF(nn.Module):
             self.shared_rank = 0
             self.private_rank = rank
         ####################add-4.28-end########################
-
+        # self.rank_capacity 768
+        self.rank_capacity = self.in_features if self._uses_front_loaded_block() else self.rank # add-5.3
         self.W_task = nn.Parameter(W0_torch.clone()) # 任务特定权重
-        self.B = nn.Parameter(torch.zeros(self.out_features, self.rank)) # [256,512]  [512,rank=64]
+        # self.B = nn.Parameter(torch.zeros(self.out_features, self.rank)) # [256,512]  [512,rank=64]
+        self.B = nn.Parameter(torch.zeros(self.out_features, self.rank_capacity)) # mod-5.3
 
         # self.A = torch.zeros(self.in_features, self.rank) # [768,256]
         ####################add-4.27-start######################
-        self.register_buffer('A', torch.zeros(self.in_features, self.rank, device=self.W0.device)) # [768,64]
+        #self.register_buffer('A', torch.zeros(self.in_features, self.rank, device=self.W0.device)) # [768,64]
+        self.register_buffer('A', torch.zeros(self.in_features, self.rank_capacity, device=self.W0.device)) # mod-5.3
         self.register_buffer('fixed_basis', torch.empty(self.in_features, 0, device=self.W0.device))
         self.register_buffer('fixed_spectrum', torch.empty(0, device=self.W0.device))
         ####################add-4.27-end########################
@@ -245,7 +251,7 @@ class OLF(nn.Module):
             # self.B.requires_grad = True # 3. 训练 B，冻结 W_task
 
             ####################add-4.28-start######################
-            basis_info = self._assign_task_subspace() # (0,32,32,64)
+            basis_info = self._assign_task_subspace() # (0,32,32,64) | (0,468,468,498)
             if self._uses_shared_core():
                 _, _, private_start, private_end = basis_info # 32,64
                 self.B_private.data.zero_()
@@ -324,7 +330,8 @@ class OLF(nn.Module):
         # 3. 另一种融合方式（包含 W0）
         self.W_fusion2 = (sum(self.W_list)+self.W0) / (len(self.W_list)+1)
         self.task_id += 1
-        self.current_rank += self.rank
+        # self.current_rank += self.rank
+        self.current_rank += self.active_rank # mod-5.3
         self.start_eval = True
         self.eval()
 
@@ -366,6 +373,44 @@ class OLF(nn.Module):
     ####################add-4.28-start######################
     def set_total_tasks(self, total_tasks):
         self.total_tasks = total_tasks
+        if self._uses_fixed_basis():
+            valid_allocs = {"disjoint_block", "front_loaded_block", "shared_core_private_block"}
+            if self.basis_alloc not in valid_allocs:
+                raise ValueError(f"Unsupported basis_alloc: {self.basis_alloc}")
+
+        if self._uses_shared_core():
+            required = self.shared_rank + total_tasks * self.private_rank
+            if required > self.in_features:
+                raise ValueError(
+                    f"Shared-core capacity exceeded: total_tasks={total_tasks}, shared_rank={self.shared_rank}, "
+                    f"private_rank={self.private_rank}, required={required}, available={self.in_features}."
+                )
+        elif self._uses_front_loaded_block():
+            first_rank = self._get_task_rank(0)
+            required = first_rank + (total_tasks - 1) * self.rank
+            if first_rank <= 0 or required > self.in_features:
+                raise ValueError(
+                    f"Front-loaded capacity exceeded: total_tasks={total_tasks}, tail_rank={self.rank}, "
+                    f"computed first_task_rank={first_rank}, required={required}, available={self.in_features}."
+                )
+        elif self._uses_fixed_basis():
+            required = total_tasks * self.rank
+            if required > self.in_features:
+                raise ValueError(
+                    f"Fixed basis capacity exceeded: total_tasks={total_tasks}, rank={self.rank}, "
+                    f"required={required}, available={self.in_features}."
+                )
+
+        ##########add.5.3-start######################
+        # if self._uses_front_loaded_block(): # True
+        #     first_rank = self._get_task_rank(0) # 768-30*9=498
+        #     required = first_rank + (total_tasks - 1) * self.rank # 768
+            # if first_rank <= 0 or required > self.in_features:
+            #     raise ValueError(
+            #         f"Front-loaded capacity exceeded: total_tasks={total_tasks}, tail_rank={self.rank}, "
+            #         f"computed first_task_rank={first_rank}, required={required}, available={self.in_features}."
+            #     )
+        ##########add.5.3-end######################
 
     def uses_shared_core(self):
         return self._uses_shared_core()
@@ -392,12 +437,13 @@ class OLF(nn.Module):
 
     def _compose_task_weight(self):
         ####################add-4.28-start######################
-        if self._uses_shared_core(): # A-> shared+privated
-            shared_weight = self.B_shared @ self.shared_basis_block.T # 共享系数矩阵[512, 32] @ 共享子空间基[32, 768] = [512, 768]
-            private_weight = self.B_private @ self.private_basis_block.T # 私有系数矩阵[512, 32] @ 私有子空间基[32, 768] = [512, 768]
+        if self._uses_shared_core(): # A-> shared+privated  A：方向基底 / 子空间(“允许沿哪些方向更新？”,A 决定“空间”)  B：这些方向的系数(“每个方向更新多少？”,B 决定“坐标”)
+            shared_weight = self.B_shared @ self.shared_basis_block.T # 共享方向基 共享系数矩阵[512, 32] @ 共享子空间基[32, 768] = [512, 768]
+            private_weight = self.B_private @ self.private_basis_block.T # 私有方向基  私有系数矩阵[512, 32] @ 私有子空间基[32, 768] = [512, 768]
             return self.W0 + shared_weight + private_weight # 最终权重 = 原始权重 + 共享贡献 + 私有贡献
         ####################add-4.28-end######################f
-        return self.W0 + self.B @ self.A.T
+        # return self.W0 + self.B @ self.A.T
+        return self.W0 + self.B[:, :self.active_rank] @ self.A[:, :self.active_rank].T # mod-5.3
     # 固定基方法 直接训练 B:W = W0 + B @ A^T   其中 A 是固定的随机正交基
     def _assign_task_subspace(self):
         #if self.total_tasks is None:
@@ -410,20 +456,40 @@ class OLF(nn.Module):
             self.shared_basis_block.copy_(self.fixed_basis[:, :self.shared_rank]) # [768,32]
             self.private_basis_block.copy_(self.fixed_basis[:, private_start:private_end]) # [768,32]
             self.A.copy_(torch.cat((self.shared_basis_block, self.private_basis_block), dim=1)) # [768,32(共享的)+32(私有的)]
+            self.active_rank = self.shared_rank + self.private_rank #  截止到当前任务需要激活的秩  468+30
             self.active_slice = (0, self.shared_rank, private_start, private_end)
             return self.active_slice
         ####################add-4.28-end########################
-        start = self.task_id * self.rank
-        end = start + self.rank
+        # start = self.task_id * self.rank
+        # end = start + self.rank
+        ####################add-5.3-start########################
+        start, end = self._get_task_slice(self.task_id) # task0: 0 498
+        active_rank = end - start # task0:498
+        # if end > self.in_features:
+        #     raise ValueError(
+        #         f"Task {self.task_id} exceeds fixed-basis capacity: need directions [{start}:{end}), "
+        #         f"but only {self.in_features} are available."
+        #     )
 
-
-        basis_block = self.fixed_basis[:, start:end] # [768,64]   特征向量
-        if self.subspace_policy == "fixed_fullrank_spectrum": #  如果使用 fullrank_spectrum，用特征值缩放
-            spectrum_block = self.fixed_spectrum[start:end].unsqueeze(0) # [1,low_rank=64]
-            basis_block = basis_block * spectrum_block # tezhengxiangliang * tezhegnzhi 重要的方向（大特征值）贡献更多 更接近真实的协方差矩阵结构
-        self.A.copy_(basis_block) # 3. 保存到 A
-        self.active_slice = (start, end) # 记录当前任务使用的子空间范围
+        basis_block = self.fixed_basis[:, start:end] # task0:768,498
+        if self.subspace_policy == "fixed_fullrank_spectrum":
+            spectrum_block = self.fixed_spectrum[start:end].unsqueeze(0)
+            basis_block = basis_block * spectrum_block
+        # self.A.copy_(basis_block)
+        self.A.zero_()
+        self.A[:, :active_rank].copy_(basis_block)
+        self.active_rank = active_rank
+        self.active_slice = (start, end)
         return start, end
+        ####################add-5.3-end########################
+
+        # basis_block = self.fixed_basis[:, start:end] # [768,64]   特征向量
+        # if self.subspace_policy == "fixed_fullrank_spectrum": #  如果使用 fullrank_spectrum，用特征值缩放
+        #     spectrum_block = self.fixed_spectrum[start:end].unsqueeze(0) # [1,low_rank=64]
+        #     basis_block = basis_block * spectrum_block # tezhengxiangliang * tezhegnzhi 重要的方向（大特征值）贡献更多 更接近真实的协方差矩阵结构
+        # self.A.copy_(basis_block) # 3. 保存到 A
+        # self.active_slice = (start, end) # 记录当前任务使用的子空间范围
+        # return start, end
     # 初始化一个固定的正交基（用于替代 OSS 子空间）
     def _init_fixed_basis(self):
         #if self.basis_alloc != "disjoint_block":
@@ -467,3 +533,32 @@ class OLF(nn.Module):
         self.fixed_basis_fixes = int(near_zero_mask.sum().item())
         return fixed.to(self.W0.dtype)
     ####################add-4.27-end########################
+    ##########add.5.3-start######################
+    def _uses_front_loaded_block(self):
+        return self._uses_fixed_basis() and not self._uses_shared_core() and self.basis_alloc == "front_loaded_block"
+
+    def _get_task_rank(self, task_id):
+        if not self._uses_front_loaded_block():
+            return self.rank
+        # if self.total_tasks is None:
+        #     raise RuntimeError("set_total_tasks must be called before computing front-loaded ranks.")
+        if task_id == 0:
+            if self.first_task_rank is not None and self.first_task_rank > 0:
+                return self.first_task_rank
+            return self.in_features - (self.total_tasks - 1) * self.rank
+        return self.rank
+
+    def _get_task_slice(self, task_id):
+        if not self._uses_front_loaded_block():
+            start = task_id * self.rank
+            end = start + self.rank
+            return start, end
+
+        first_rank = self._get_task_rank(0)
+        if task_id == 0:
+            return 0, first_rank
+        start = first_rank + (task_id - 1) * self.rank
+        end = start + self.rank
+        return start, end
+    ####################mod-5.3-end###########################
+    ##########add.5.3-end######################
