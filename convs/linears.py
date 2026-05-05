@@ -562,3 +562,31 @@ class OLF(nn.Module):
         return start, end
     ####################mod-5.3-end###########################
     ##########add.5.3-end######################
+    ##########add.5.4-vis-start######################
+    def get_b_snapshot(self):
+        snapshot = {
+            "task_id": self.task_id,
+            "subspace_policy": self.subspace_policy,
+            "basis_alloc": self.basis_alloc,
+            "active_rank": int(self.active_rank),
+            "active_slice": self.active_slice,
+        }
+        if self._uses_shared_core():
+            snapshot.update(
+                {
+                    "B_shared": self.B_shared.detach().cpu().clone(),
+                    "B_private": self.B_private.detach().cpu().clone(),
+                    "shared_rank": int(self.shared_rank),
+                    "private_rank": int(self.private_rank),
+                    "private_slice": self.active_slice,
+                }
+            )
+        else:
+            snapshot.update(
+                {
+                    "B": self.B[:, :self.active_rank].detach().cpu().clone(),
+                    "slice": self.active_slice,
+                }
+            )
+        return snapshot
+    ##########add.5.4-vis-end######################

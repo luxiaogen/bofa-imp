@@ -8,9 +8,109 @@ from utils.toolkit import count_parameters
 import os
 import random
 import numpy as np
+import json
 # import wandb
 from datetime import datetime
 
+##########add.5.4-vis-start######################
+def _compute_tensor_metrics(tensor):
+    return {
+        "fro_norm": float(torch.norm(tensor, p="fro").item()),
+        "mean_abs": float(tensor.abs().mean().item()),
+        "max_abs": float(tensor.abs().max().item()),
+        "col_norms": [float(v) for v in torch.norm(tensor, dim=0).tolist()],
+        "delta_from_zero": float(torch.norm(tensor, p="fro").item()),
+    }
+
+
+def _compute_b_summary(snapshot, previous_snapshot=None, eps=1e-8):
+    summary = {
+        "task_id": int(snapshot["task_id"]),
+        "subspace_policy": snapshot["subspace_policy"],
+        "basis_alloc": snapshot["basis_alloc"],
+        "active_rank": int(snapshot["active_rank"]),
+        "active_slice": list(snapshot["active_slice"]) if snapshot["active_slice"] is not None else None,
+    }
+
+    if "B" in snapshot:
+        B = snapshot["B"]
+        summary.update(_compute_tensor_metrics(B))
+        # if previous_snapshot is not None and "B" in previous_snapshot:
+        if (
+                previous_snapshot is not None
+                and "B" in previous_snapshot
+                and tuple(previous_snapshot["B"].shape) == tuple(B.shape)
+                and previous_snapshot.get("active_slice") == snapshot.get("active_slice")
+        ):
+            # summary["delta_fro_norm"] = float(torch.norm(B - previous_snapshot["B"], p="fro").item())
+            summary["delta_reference"] = "previous_task"
+        else:
+            # summary["delta_fro_norm"] = summary["fro_norm"]
+            summary["delta_reference"] = "zero_init"
+    else:
+        B_shared = snapshot["B_shared"]
+        B_private = snapshot["B_private"]
+        shared_metrics = _compute_tensor_metrics(B_shared)
+        private_metrics = _compute_tensor_metrics(B_private)
+
+        summary.update(
+            {
+                "shared_rank": int(snapshot["shared_rank"]),
+                "private_rank": int(snapshot["private_rank"]),
+                "private_slice": list(snapshot["private_slice"]) if snapshot["private_slice"] is not None else None,
+                "fro_norm_shared": shared_metrics["fro_norm"],
+                "fro_norm_private": private_metrics["fro_norm"],
+                "mean_abs_shared": shared_metrics["mean_abs"],
+                "mean_abs_private": private_metrics["mean_abs"],
+                "max_abs_shared": shared_metrics["max_abs"],
+                "max_abs_private": private_metrics["max_abs"],
+                "col_norms_shared": shared_metrics["col_norms"],
+                "col_norms_private": private_metrics["col_norms"],
+                "delta_from_zero_shared": shared_metrics["delta_from_zero"],
+                "delta_from_zero_private": private_metrics["delta_from_zero"],
+                "shared_private_ratio": shared_metrics["fro_norm"] / (private_metrics["fro_norm"] + eps),
+                "fro_norm": (shared_metrics["fro_norm"] ** 2 + private_metrics["fro_norm"] ** 2) ** 0.5,
+            }
+        )
+
+        # if previous_snapshot is not None and "B_shared" in previous_snapshot and "B_private" in previous_snapshot:
+        if (
+                previous_snapshot is not None
+                and "B_shared" in previous_snapshot
+                and "B_private" in previous_snapshot
+                and tuple(previous_snapshot["B_shared"].shape) == tuple(B_shared.shape)
+                and tuple(previous_snapshot["B_private"].shape) == tuple(B_private.shape)
+        ):
+            delta_shared = float(torch.norm(B_shared - previous_snapshot["B_shared"], p="fro").item())
+            delta_private = float(torch.norm(B_private - previous_snapshot["B_private"], p="fro").item())
+            summary["delta_reference"] = "previous_task"
+        else:
+            delta_shared = shared_metrics["fro_norm"]
+            delta_private = private_metrics["fro_norm"]
+            summary["delta_reference"] = "zero_init"
+        summary["delta_fro_norm_shared"] = delta_shared
+        summary["delta_fro_norm_private"] = delta_private
+        summary["delta_fro_norm"] = (delta_shared ** 2 + delta_private ** 2) ** 0.5
+
+    return summary
+
+
+def _save_b_snapshot(model, analysis_dir, task_id, previous_snapshot=None):
+    snapshot = model._network.olf_layer.get_b_snapshot()
+    os.makedirs(analysis_dir, exist_ok=True)
+
+    snapshot_path = os.path.join(analysis_dir, f"task_{task_id:02d}_b_snapshot.pt")
+    torch.save(snapshot, snapshot_path)
+
+    summary = _compute_b_summary(snapshot, previous_snapshot=previous_snapshot)
+    summary_path = os.path.join(analysis_dir, f"task_{task_id:02d}_b_summary.json")
+    with open(summary_path, "w", encoding="utf-8") as f:
+        json.dump(summary, f, indent=2)
+
+    logging.info("Saved B snapshot to %s", snapshot_path)
+    logging.info("B summary: %s", summary)
+    return snapshot, summary
+##########add.5.4-vis-end######################
 def train(args):
     seed_list = copy.deepcopy(args["seed"])
     device = copy.deepcopy(args["device"])
@@ -30,19 +130,33 @@ def _train(args):
         os.makedirs(logs_name)
     # 添加时间戳，格式: YYYYMMDD_HHMMSS
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    logfilename = "logs/{}/{}/{}/{}/seed:{}_model:{}_{}".format(args["model_name"],
-                                                             args["dataset"],
-                                                             init_cls, args["increment"],
-                                                             args["seed"],
-                                                             args["model_name"],
-                                                             timestamp
-                                                             )
+    # logfilename = "logs/{}/{}/{}/{}/seed:{}_model:{}_{}".format(args["model_name"],
+    #                                                          args["dataset"],
+    #                                                          init_cls, args["increment"],
+    #                                                          args["seed"],
+    #                                                          args["model_name"],
+    #                                                          timestamp
+    #                                                          )
+
+    # logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(filename)s] => %(message)s",
+    #                     handlers=[
+    #                         logging.FileHandler(filename=logfilename + ".log"),
+    #                         logging.StreamHandler(sys.stdout),
+    #                     ],
+    #                     )
+    ##########################mod-5.4-vis-start####################################
+    run_tag = "seed_{}_model_{}_{}".format(args["seed"], args["model_name"], timestamp)
+    logfilename = os.path.join(logs_name, run_tag + ".log")
+    run_dir = os.path.join(logs_name, run_tag)
+    analysis_dir = os.path.join(run_dir, "b_analysis")
+    os.makedirs(run_dir, exist_ok=True)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(filename)s] => %(message)s",
                         handlers=[
-                            logging.FileHandler(filename=logfilename + ".log"),
+                            logging.FileHandler(filename=logfilename),
                             logging.StreamHandler(sys.stdout),
                         ],
                         )
+    ##########################mod-5.4-vis-end####################################
 
     _set_random()
     _set_device(args)
@@ -51,7 +165,8 @@ def _train(args):
     data_manager = DataManager(
         args["dataset"], args["shuffle"], args["seed"], args["init_cls"], args["increment"], )
     model = factory.get_model(args["model_name"], args)
-    model.save_dir = logs_name
+    # model.save_dir = logs_name
+    model.save_dir = run_dir # mod-5.4
 
     # 使用 W_fusion 权重（纯任务平均）
     top1_curve = {"top1": []}  # 基于 OLF Layer 的特征
@@ -64,6 +179,9 @@ def _train(args):
     # 使用直接的 argmax 预测
     #max_curve = {"top1": []} #  基于 W_fusion
     #max2_curve = {"top1": []} # 基于 W_fusion2
+
+    previous_b_snapshot = None # add-5.4
+
     for task in range(data_manager.nb_tasks): # 10 task
         logging.info("All params: {}".format(count_parameters(model._network)))
         logging.info(
@@ -73,6 +191,10 @@ def _train(args):
         model.incremental_train(data_manager)
         # cnn_accy, nme_accy = model.eval_task()
         cnn_accy, nme_accy, zs_seen, zs_unseen, zs_harmonic, zs_total = model.eval_task()
+        ##########################add-5.4-vis-start####################################
+        previous_b_snapshot, _ = _save_b_snapshot(model, analysis_dir, task, previous_snapshot=previous_b_snapshot)
+        ##########################add-5.4-vis-end####################################
+
         model.after_task()
 
         # task acc
