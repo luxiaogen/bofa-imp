@@ -128,6 +128,11 @@ class OLF(nn.Module):
             shared_lr_scale=0.1,
             ####################add-4.28-end########################
             first_task_rank=-1, # add-5.3
+            ####################add-5.5-start######################
+            shared_importance_mode="none",
+            importance_beta=0.9,
+            importance_alpha=1.0,
+            ####################add-5.5-end######################
     ):
         super().__init__()
         self.in_features = in_features # 768
@@ -147,6 +152,12 @@ class OLF(nn.Module):
         ####################add-4.28-start######################
         self.shared_lr_scale = shared_lr_scale # 0.1
         ####################add-4.28-end########################
+        ####################add-5.5-start######################
+        self.shared_importance_mode = shared_importance_mode # 'column_grad_scale'
+        self.importance_beta = importance_beta # 0.9
+        self.importance_alpha = importance_alpha # 1.0
+        self.importance_eps = 1e-8
+        ####################add-5.5-end######################
         self.first_task_rank = first_task_rank # add-5.3
         self.total_tasks = None
         self.fixed_basis_fixes = 0 # 记录修复的特征值数量
@@ -190,6 +201,10 @@ class OLF(nn.Module):
         self.register_buffer('shared_basis_block',torch.empty(self.in_features, self.shared_rank, device=self.W0.device))
         self.register_buffer('private_basis_block',torch.empty(self.in_features, self.private_rank, device=self.W0.device))
         ####################add-4.28-end########################
+        ####################add-5.5-start######################
+        self.register_buffer('shared_importance', torch.zeros(self.shared_rank, device=self.W0.device)) # torch.Size([468])
+        self.register_buffer('shared_grad_scale', torch.ones(self.shared_rank, device=self.W0.device))
+        ####################add-5.5-end######################
 
         self.W_task.requires_grad = False  # 初始时冻结
         self.W_fusion = W0_torch.clone().detach() # [512,768] mean(所有任务权重)
@@ -329,6 +344,11 @@ class OLF(nn.Module):
         self.W_fusion = (sum(self.W_list)) / len(self.W_list)
         # 3. 另一种融合方式（包含 W0）
         self.W_fusion2 = (sum(self.W_list)+self.W0) / (len(self.W_list)+1)
+
+        ####################add-5.5-start######################
+        self.update_shared_importance()
+        ####################add-5.5-end######################
+
         self.task_id += 1
         # self.current_rank += self.rank
         self.current_rank += self.active_rank # mod-5.3
@@ -579,6 +599,11 @@ class OLF(nn.Module):
                     "shared_rank": int(self.shared_rank),
                     "private_rank": int(self.private_rank),
                     "private_slice": self.active_slice,
+                    ####################add-5.5-start######################
+                    "shared_importance_mode": self.shared_importance_mode,
+                    "shared_importance": self.shared_importance.detach().cpu().clone(),
+                    "shared_grad_scale": self.shared_grad_scale.detach().cpu().clone(),
+                    ####################add-5.5-end######################
                 }
             )
         else:
@@ -590,3 +615,43 @@ class OLF(nn.Module):
             )
         return snapshot
     ##########add.5.4-vis-end######################
+    ####################add-5.5-start######################
+    def _uses_shared_importance(self):
+        return self._uses_shared_core() and self.shared_importance_mode == "column_grad_scale"
+
+    def apply_shared_importance_to_grads(self):
+        if not self._uses_shared_importance():
+            return
+        if self.task_id == 0:
+            return
+        if self.B_shared.grad is None or self.shared_grad_scale.numel() == 0:
+            return # [512,468]@[1,468] | shared_grad_scale:一个缩放因子张量，用于调整不同维度的梯度大小
+        self.B_shared.grad.mul_(self.shared_grad_scale.unsqueeze(0))
+
+    def update_shared_importance(self):
+        if not self._uses_shared_importance():
+            return
+        if self.shared_rank <= 0:
+            return
+        with torch.no_grad():
+            # 步骤1: 计算每列的L2范数（衡量每个共享维度的重要性）
+            col_norm = torch.norm(self.B_shared.detach(), dim=0) # [512,468]->[468]
+            # 步骤2: 指数移动平均更新重要性
+            if self.task_id == 0 and torch.count_nonzero(self.shared_importance).item() == 0:
+                updated_importance = col_norm # 初始化
+            else: # importance_beta:EMA系数 importance_alpha  平滑地累积历史重要性，避免剧烈波动
+                updated_importance = self.importance_beta * self.shared_importance + (
+                            1 - self.importance_beta) * col_norm # 468  0.9*shared_importance+0.1*col_norm | 90%权重给历史（保持稳定）+ 10%权重给当前（适应新任务）
+            self.shared_importance.copy_(updated_importance)
+            # 步骤3: 归一化重要性
+            mean_importance = updated_importance.mean() # danshu zhi 计算所有维度重要性的均值
+            norm_importance = updated_importance / (mean_importance + self.importance_eps) # [468]
+            # 步骤4: 计算梯度缩放因子（重要性越高，梯度缩放越小） importance_alpha:重要性缩放系数
+            # grad_scale = 1.0 / (1.0 + self.importance_alpha * norm_importance) # 保护这个知识不被后续任务破坏
+            # 步骤5: 二次归一化   反比例缩放
+            grad_scale = 1.0 / (1.0 + self.importance_alpha * norm_importance)
+            grad_scale = grad_scale / (grad_scale.mean() + self.importance_eps) # [468]
+            # grad_scale = grad_scale / (grad_scale.mean() + self.importance_eps)
+            self.shared_grad_scale.copy_(grad_scale.clamp_(0.0, 2.0))
+            # self.shared_grad_scale.copy_(grad_scale.clamp_(0.0, 1.0))
+    ####################add-5.5-end######################

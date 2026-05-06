@@ -75,6 +75,17 @@ def setup_parser():
     ####################add-4.28-end########################
     parser.add_argument("--first_task_rank", type=int, default=-1,
                         help="Override rank for task 0 when basis_alloc=front_loaded_block.")
+    ####################add-5.5-start######################
+    parser.add_argument(
+        "--shared_importance_mode",
+        type=str,
+        default="none",
+        choices=["none", "column_grad_scale"],
+        help="Importance-aware update mode for shared-core B_shared.",
+    )
+    parser.add_argument("--importance_beta", type=float, default=0.9, help="EMA decay for shared importance.")
+    parser.add_argument("--importance_alpha", type=float, default=1.0, help="Strength of shared gradient suppression.")
+    ####################add-5.5-end######################
     return parser
 
 

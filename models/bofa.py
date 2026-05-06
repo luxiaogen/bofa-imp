@@ -260,6 +260,11 @@ class Learner(BaseLearner):
                 # 3. 反向传播
                 optimizer.zero_grad()
                 loss.backward()
+
+                ####################add-5.5-start######################
+                self._network.apply_shared_importance_to_grads()
+                ####################add-5.5-end######################
+
                 optimizer.step()
                 losses += loss.item()
                 loss_low += low_loss.item()

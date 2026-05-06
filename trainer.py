@@ -73,6 +73,25 @@ def _compute_b_summary(snapshot, previous_snapshot=None, eps=1e-8):
             }
         )
 
+        ####################add-5.5-start######################
+        if "shared_importance" in snapshot:
+            shared_importance = snapshot["shared_importance"]
+            summary["shared_importance"] = [float(v) for v in shared_importance.tolist()]
+            summary["shared_importance_mean"] = float(
+                shared_importance.mean().item()) if shared_importance.numel() > 0 else 0.0
+            summary["shared_importance_max"] = float(
+                shared_importance.max().item()) if shared_importance.numel() > 0 else 0.0
+        if "shared_grad_scale" in snapshot:
+            shared_grad_scale = snapshot["shared_grad_scale"]
+            summary["shared_grad_scale"] = [float(v) for v in shared_grad_scale.tolist()]
+            summary["shared_grad_scale_mean"] = float(
+                shared_grad_scale.mean().item()) if shared_grad_scale.numel() > 0 else 0.0
+            summary["shared_grad_scale_min"] = float(
+                shared_grad_scale.min().item()) if shared_grad_scale.numel() > 0 else 0.0
+        if "shared_importance_mode" in snapshot:
+            summary["shared_importance_mode"] = snapshot["shared_importance_mode"]
+        ####################add-5.5-end######################
+
         # if previous_snapshot is not None and "B_shared" in previous_snapshot and "B_private" in previous_snapshot:
         if (
                 previous_snapshot is not None

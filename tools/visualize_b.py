@@ -77,11 +77,15 @@ def plot_param_heatmap(matrix, title, output_path):
 
 def plot_svd_spectra(arrays, title, output_path, topk=20):
     plt.figure(figsize=(8, 4)) # 20
-    for task_id, arr in enumerate(arrays): #
+    max_plot_len = 0
+    for task_id, arr in enumerate(arrays): # 所有 b [512,498-30] --- [512,30]
         singular_values = np.linalg.svd(arr, compute_uv=False)[:topk] # [:topk] 只取前20个最大的奇异值
+        max_plot_len = max(max_plot_len, len(singular_values))
         plt.plot(np.arange(1, len(singular_values) + 1), singular_values, marker="o", label=f"task_{task_id}")
     plt.xlabel("Singular value index")
     plt.ylabel("Singular value")
+    if max_plot_len > 0:
+        plt.xticks(np.arange(1, max_plot_len + 1, 2))
     plt.title(title)
     if len(arrays) <= 10:
         plt.legend()
@@ -139,6 +143,45 @@ def analyze_shared_core(snapshots, output_dir, with_svd=True):
         "fro_norms_total": total_norms,
         "shared_private_ratio": ratio,
     }
+
+    ####################add-5.6-start######################
+    grad_scale_list = []
+    if all("shared_grad_scale" in snapshot for snapshot in snapshots):
+        grad_scale_list = [to_numpy(snapshot["shared_grad_scale"]).astype(np.float32) for snapshot in snapshots]
+        scale_matrix = np.stack(grad_scale_list, axis=0)
+        scale_min = [float(np.min(scale)) for scale in grad_scale_list]
+        scale_mean = [float(np.mean(scale)) for scale in grad_scale_list]
+        scale_max = [float(np.max(scale)) for scale in grad_scale_list]
+        metrics.update(
+            {
+                "shared_grad_scale_min": scale_min,
+                "shared_grad_scale_mean": scale_mean,
+                "shared_grad_scale_max": scale_max,
+            }
+        )
+        plot_line(
+            task_ids,
+            [scale_min, scale_mean, scale_max],
+            ["min", "mean", "max"],
+            "Gradient scale",
+            "B_shared Gradient Scale by Task",
+            os.path.join(output_dir, "shared_grad_scale_curve.png"),
+        )
+        plot_scale_heatmap(
+            scale_matrix,
+            "B_shared Gradient Scale Heatmap",
+            os.path.join(output_dir, "shared_grad_scale_heatmap.png"),
+            task_ids=task_ids,
+        )
+        relative_scale_matrix = scale_matrix / (scale_matrix.mean(axis=1, keepdims=True) + 1e-8)
+        plot_scale_heatmap(
+            relative_scale_matrix,
+            "B_shared Relative Gradient Scale Heatmap",
+            os.path.join(output_dir, "shared_grad_scale_relative_heatmap.png"),
+            task_ids=task_ids,
+            center=1.0,
+        )
+    ####################add-5.6-end#########################
 
     plot_line(
         task_ids,
@@ -205,6 +248,36 @@ def main():
 
     print(f"Saved B analysis plots to {output_dir}")
 
+
+####################add-5.6-start######################
+def plot_scale_heatmap(matrix, title, output_path, task_ids=None, center=None):
+    finite = matrix[np.isfinite(matrix)]
+    if finite.size == 0:
+        return
+    vmin = float(np.percentile(finite, 1))
+    vmax = float(np.percentile(finite, 99))
+    if abs(vmax - vmin) < 1e-8:
+        vmin -= 1e-4
+        vmax += 1e-4
+    plt.figure(figsize=(10, 4))
+    masked = np.ma.masked_invalid(matrix)
+    cmap = plt.cm.coolwarm.copy()
+    cmap.set_bad(color="lightgray")
+    if center is not None and vmin < center < vmax:
+        norm = matplotlib.colors.TwoSlopeNorm(vmin=vmin, vcenter=center, vmax=vmax)
+        plt.imshow(masked, aspect="auto", interpolation="nearest", cmap=cmap, norm=norm)
+    else:
+        plt.imshow(masked, aspect="auto", interpolation="nearest", cmap=cmap, vmin=vmin, vmax=vmax)
+    plt.colorbar()
+    plt.xlabel("Shared direction")
+    plt.ylabel("Task")
+    if task_ids is not None:
+        plt.yticks(np.arange(len(task_ids)), task_ids)
+    plt.title(title)
+    plt.tight_layout()
+    plt.savefig(output_path, dpi=200)
+    plt.close()
+####################add-5.6-end#########################
 
 if __name__ == "__main__":
     main()

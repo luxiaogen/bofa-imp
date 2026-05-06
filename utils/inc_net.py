@@ -125,6 +125,11 @@ class BofaAdapter(BaseNet):
             shared_rank=args.get("shared_rank", -1),
             shared_lr_scale=args.get("shared_lr_scale", 0.1),
             ####################add-4.28-end########################
+            ####################add-5.5-start######################
+            shared_importance_mode=args.get("shared_importance_mode", "none"), # 'column_grad_scale'
+            importance_beta=args.get("importance_beta", 0.9), # 0.9
+            importance_alpha=args.get("importance_alpha", 1.0), # 1.0
+            ####################add-5.5-end######################
             first_task_rank=args.get("first_task_rank", -1),
         )
         ####################add-4.27-end########################
@@ -386,3 +391,8 @@ class BofaAdapter(BaseNet):
     def uses_two_stage(self):
         return self.olf_layer.uses_two_stage()
     ####################add-4.27-end########################
+
+    ####################add-5.5-start######################
+    def apply_shared_importance_to_grads(self):
+        self.olf_layer.apply_shared_importance_to_grads()
+    ####################add-5.5-end######################
