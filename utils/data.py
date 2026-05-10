@@ -195,8 +195,10 @@ class iImageNetR(iData):
 
     def download_data(self):
         # assert 0, "You should specify the folder of your dataset"
-        train_dir = os.path.join(DATA_ROOT_PATH,"imagenet-r-split/train/")
-        test_dir = os.path.join(DATA_ROOT_PATH,"imagenet-r-split/val/")
+        # train_dir = os.path.join(DATA_ROOT_PATH,"imagenet-r-split/train/")
+        # test_dir = os.path.join(DATA_ROOT_PATH,"imagenet-r-split/val/")
+        train_dir = os.path.join(DATA_ROOT_PATH,"tmp/imagenet-r/train")
+        test_dir = os.path.join(DATA_ROOT_PATH,"tmp/imagenet-r/test")
 
         train_dset = datasets.ImageFolder(train_dir)
         test_dset = datasets.ImageFolder(test_dir)

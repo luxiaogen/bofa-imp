@@ -91,6 +91,35 @@ def _compute_b_summary(snapshot, previous_snapshot=None, eps=1e-8):
         if "shared_importance_mode" in snapshot:
             summary["shared_importance_mode"] = snapshot["shared_importance_mode"]
         ####################add-5.5-end######################
+        ####################add-5.7-start######################
+        if "shared_svd_reg_lambda" in snapshot:
+            summary["shared_svd_reg_lambda"] = float(snapshot["shared_svd_reg_lambda"])
+            summary["shared_svd_reg_topk"] = int(snapshot["shared_svd_reg_topk"])
+            summary["shared_svd_grad_mode"] = snapshot.get("shared_svd_grad_mode", "none")
+            summary["shared_svd_ready"] = bool(snapshot["shared_svd_ready"])
+        if "shared_svd_weight" in snapshot:
+            shared_svd_weight = snapshot["shared_svd_weight"]
+            summary["shared_svd_weight"] = [float(v) for v in shared_svd_weight.tolist()]
+            summary["shared_svd_weight_mean"] = float(
+                shared_svd_weight.mean().item()) if shared_svd_weight.numel() > 0 else 0.0
+            summary["shared_svd_weight_max"] = float(
+                shared_svd_weight.max().item()) if shared_svd_weight.numel() > 0 else 0.0
+        ####################add-5.7-end#########################
+        ####################add-5.8-start######################
+        if "shared_param_reg_mode" in snapshot:
+            summary["shared_param_reg_mode"] = snapshot["shared_param_reg_mode"]
+            summary["shared_param_reg_lambda"] = float(snapshot["shared_param_reg_lambda"])
+            summary["shared_param_ready"] = bool(snapshot["shared_param_ready"])
+        if "shared_param_importance" in snapshot:
+            shared_param_importance = snapshot["shared_param_importance"]
+            # summary["shared_param_importance"] = [float(v) for v in shared_param_importance.flatten().tolist()]
+            summary["shared_param_importance_mean"] = (
+                float(shared_param_importance.mean().item()) if shared_param_importance.numel() > 0 else 0.0
+            )
+            summary["shared_param_importance_max"] = (
+                float(shared_param_importance.max().item()) if shared_param_importance.numel() > 0 else 0.0
+            )
+        ####################add-5.8-end#########################
 
         # if previous_snapshot is not None and "B_shared" in previous_snapshot and "B_private" in previous_snapshot:
         if (
@@ -112,8 +141,32 @@ def _compute_b_summary(snapshot, previous_snapshot=None, eps=1e-8):
         summary["delta_fro_norm"] = (delta_shared ** 2 + delta_private ** 2) ** 0.5
 
     return summary
+######5.7-add-log-start##############################
+def _build_run_tag(args, timestamp):
+    parts = [
+        f"seed{args['seed']}",
+        args.get("subspace_policy", "data_oss"),
+        args.get("basis_alloc", "none"),
+        f"Kt{args.get('Kt', 'na')}",
+    ] # ['seed1993', 'fixed_svd_shared_core', 'shared_core_private_block', 'Kt498']
 
+    if args.get("shared_rank", -1) > 0:
+        parts.append(f"sr{args['shared_rank']}")
 
+    if args.get("shared_svd_grad_mode", "none") != "none":
+        parts.append(f"ogd{args.get('shared_svd_reg_topk', 20)}")
+
+    if args.get("shared_svd_reg_lambda", 0.0) > 0:
+        parts.append(f"svd{args.get('shared_svd_reg_topk', 20)}")
+        parts.append(f"lam{args['shared_svd_reg_lambda']}")
+
+    if args.get("shared_importance_mode", "none") != "none":
+        parts.append(f"impA{args.get('importance_alpha', 1.0)}B{args.get('importance_beta', 0.9)}")
+
+    parts.append(f"ep{args.get('tuned_epoch', 'na')}")
+    parts.append(timestamp)
+    return "_".join(str(p).replace("/", "-") for p in parts)
+######5.7-add-log-end##############################
 def _save_b_snapshot(model, analysis_dir, task_id, previous_snapshot=None):
     snapshot = model._network.olf_layer.get_b_snapshot()
     os.makedirs(analysis_dir, exist_ok=True)
@@ -164,7 +217,8 @@ def _train(args):
     #                     ],
     #                     )
     ##########################mod-5.4-vis-start####################################
-    run_tag = "seed_{}_model_{}_{}".format(args["seed"], args["model_name"], timestamp)
+    # run_tag = "seed_{}_model_{}_{}".format(args["seed"], args["model_name"], timestamp)
+    run_tag = _build_run_tag(args, timestamp) # 'seed1993_fixed_svd_shared_core_shared_core_private_block_Kt498_sr468_ogd20_ep17_20260507_163947'
     logfilename = os.path.join(logs_name, run_tag + ".log")
     run_dir = os.path.join(logs_name, run_tag)
     analysis_dir = os.path.join(run_dir, "b_analysis")

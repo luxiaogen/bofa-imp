@@ -258,12 +258,23 @@ class Learner(BaseLearner):
                 else:
                     loss = clip_loss # 2.2 CLIP 损失
                 # 3. 反向传播
+
+                loss = loss + self._network.shared_svd_regularization() # add-5.7
+                ####################add-5.8-start######################
+                loss = loss + self._network.shared_param_regularization()
+                ####################add-5.8-end#########################
+
                 optimizer.zero_grad()
                 loss.backward()
 
                 ####################add-5.5-start######################
+                self._network.apply_shared_svd_ogd_to_grads()
                 self._network.apply_shared_importance_to_grads()
                 ####################add-5.5-end######################
+
+                ####################add-5.8-start######################
+                self._network.accumulate_shared_param_importance()
+                ####################add-5.8-end#########################
 
                 optimizer.step()
                 losses += loss.item()

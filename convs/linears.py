@@ -133,6 +133,18 @@ class OLF(nn.Module):
             importance_beta=0.9,
             importance_alpha=1.0,
             ####################add-5.5-end######################
+            ####################add-5.7-start######################
+            shared_svd_reg_lambda=0.0,
+            shared_svd_reg_topk=20,
+            ####################add-5.7-end#########################
+            ####################add-5.7-start######################
+            shared_svd_grad_mode="none",
+            ####################add-5.7-end#########################
+            ####################add-5.8-start######################
+            shared_param_reg_mode="none",
+            shared_param_reg_lambda=0.0,
+            shared_param_importance_beta=0.9,
+            ####################add-5.8-end#########################
     ):
         super().__init__()
         self.in_features = in_features # 768
@@ -159,6 +171,16 @@ class OLF(nn.Module):
         self.importance_eps = 1e-8
         ####################add-5.5-end######################
         self.first_task_rank = first_task_rank # add-5.3
+        ####################add-5.7-start######################
+        self.shared_svd_reg_lambda = shared_svd_reg_lambda # 0.001
+        self.shared_svd_reg_topk = shared_svd_reg_topk # 20
+        self.shared_svd_grad_mode = shared_svd_grad_mode # 'ogd_project'
+        ####################add-5.7-end#########################
+        ####################add-5.8-start######################
+        self.shared_param_reg_mode = shared_param_reg_mode
+        self.shared_param_reg_lambda = shared_param_reg_lambda
+        self.shared_param_importance_beta = shared_param_importance_beta
+        ####################add-5.8-end#########################
         self.total_tasks = None
         self.fixed_basis_fixes = 0 # 记录修复的特征值数量
         self.active_slice = None
@@ -205,6 +227,26 @@ class OLF(nn.Module):
         self.register_buffer('shared_importance', torch.zeros(self.shared_rank, device=self.W0.device)) # torch.Size([468])
         self.register_buffer('shared_grad_scale', torch.ones(self.shared_rank, device=self.W0.device))
         ####################add-5.5-end######################
+        ####################add-5.7-start######################
+        self.shared_svd_topk = min(int(self.shared_svd_reg_topk), self.out_features, self.shared_rank) # min(20,512,468)
+        self.register_buffer('shared_svd_anchor_B', # [512, 468] 锚点（参考点），通常是上一个任务结束时的 B_shared
+                             torch.zeros(self.out_features, self.shared_rank, device=self.W0.device))
+        self.register_buffer('shared_svd_U', # [512, 20]
+                             torch.empty(self.out_features, self.shared_svd_topk, device=self.W0.device))
+        self.register_buffer('shared_svd_V', torch.empty(self.shared_rank, self.shared_svd_topk, device=self.W0.device)) # [468, 20]
+        self.register_buffer('shared_svd_weight', torch.empty(self.shared_svd_topk, device=self.W0.device)) # [20]
+        self.register_buffer('shared_svd_ready', torch.tensor(False, device=self.W0.device))
+        ####################add-5.7-end#########################
+        ####################add-5.8-start######################
+        self.register_buffer('shared_param_anchor_B',
+                             torch.zeros(self.out_features, self.shared_rank, device=self.W0.device))
+        self.register_buffer('shared_param_importance',
+                             torch.zeros(self.out_features, self.shared_rank, device=self.W0.device))
+        self.register_buffer('shared_param_importance_accum',
+                             torch.zeros(self.out_features, self.shared_rank, device=self.W0.device))
+        self.register_buffer('shared_param_importance_steps', torch.tensor(0.0, device=self.W0.device))
+        self.register_buffer('shared_param_ready', torch.tensor(False, device=self.W0.device))
+        ####################add-5.8-end#########################
 
         self.W_task.requires_grad = False  # 初始时冻结
         self.W_fusion = W0_torch.clone().detach() # [512,768] mean(所有任务权重)
@@ -348,6 +390,12 @@ class OLF(nn.Module):
         ####################add-5.5-start######################
         self.update_shared_importance()
         ####################add-5.5-end######################
+        ####################add-5.7-start######################
+        self.update_shared_svd_anchor()
+        ####################add-5.7-end#########################
+        ####################add-5.8-start######################
+        self.update_shared_param_importance()
+        ####################add-5.8-end#########################
 
         self.task_id += 1
         # self.current_rank += self.rank
@@ -604,6 +652,19 @@ class OLF(nn.Module):
                     "shared_importance": self.shared_importance.detach().cpu().clone(),
                     "shared_grad_scale": self.shared_grad_scale.detach().cpu().clone(),
                     ####################add-5.5-end######################
+                    ####################add-5.7-start######################
+                    "shared_svd_reg_lambda": float(self.shared_svd_reg_lambda),
+                    "shared_svd_reg_topk": int(self.shared_svd_topk),
+                    "shared_svd_grad_mode": self.shared_svd_grad_mode,
+                    "shared_svd_ready": bool(self.shared_svd_ready.item()),
+                    "shared_svd_weight": self.shared_svd_weight.detach().cpu().clone(),
+                    ####################add-5.7-end#########################
+                    ####################add-5.8-start######################
+                    "shared_param_reg_mode": self.shared_param_reg_mode,
+                    "shared_param_reg_lambda": float(self.shared_param_reg_lambda),
+                    "shared_param_ready": bool(self.shared_param_ready.item()),
+                    "shared_param_importance": self.shared_param_importance.detach().cpu().clone(),
+                    ####################add-5.8-end#########################
                 }
             )
         else:
@@ -655,3 +716,133 @@ class OLF(nn.Module):
             self.shared_grad_scale.copy_(grad_scale.clamp_(0.0, 2.0))
             # self.shared_grad_scale.copy_(grad_scale.clamp_(0.0, 1.0))
     ####################add-5.5-end######################
+    ####################add-5.7-start######################
+    def _uses_shared_svd_regularization(self):
+        return self._uses_shared_core() and self.shared_svd_reg_lambda > 0 and self.shared_svd_topk > 0
+
+    def _uses_shared_svd_ogd(self):
+        return self._uses_shared_core() and self.shared_svd_grad_mode == "ogd_project" and self.shared_svd_topk > 0
+
+    def _uses_shared_svd_anchor(self):
+        return self._uses_shared_svd_regularization() or self._uses_shared_svd_ogd()
+
+    def update_shared_svd_anchor(self):
+        if not self._uses_shared_svd_anchor():
+            return
+        with torch.no_grad(): # 任务结束时，保存当前 B_shared 的 top-k SVD 子空间
+            anchor = self.B_shared.detach() # 旧任务的 B_shared
+            U, S, Vh = torch.linalg.svd(anchor, full_matrices=False) # old_shared_B
+            topk = self.shared_svd_topk # 预设的 20-468
+            weights = S[:topk] / (S[:topk].mean() + self.importance_eps) # 获取相应的权重
+            self.shared_svd_anchor_B.copy_(anchor)
+            self.shared_svd_U.copy_(U[:, :topk])
+            self.shared_svd_V.copy_(Vh[:topk, :].T)
+            self.shared_svd_weight.copy_(weights)
+            self.shared_svd_ready.fill_(True)
+
+    # 后续任务训练时，计算 B_shared 相对旧 anchor 的变化，并投影到旧 top-k 子空间里惩罚
+    def shared_svd_regularization(self):
+        if not self._uses_shared_svd_regularization():
+            return self.B_shared.new_tensor(0.0)  # 如果没有使用 svd 正则化
+        if self.task_id == 0 or not bool(self.shared_svd_ready.item()):
+            return self.B_shared.new_tensor(0.0)
+        delta = self.B_shared - self.shared_svd_anchor_B # [512,468] 参数相对于某个"安全状态"偏移了多少
+        # [20,20] U.T 和 V 是旋转矩阵，将坐标系旋转到主成分方向 U.T @ delta:将 delta 投影到输出空间的主方向 @ V：再投影到输入空间的主方向    将变化量投影到SVD子空间
+        projected_delta = self.shared_svd_U.T @ delta @ self.shared_svd_V
+        # 重要方向（大奇异值）的变化会被赋予更大的惩罚权重,不重要方向（小奇异值）的变化惩罚较小
+        # [20,20] 构造加权矩阵, shared_svd_weight[20] svd value M[i][j] = weight[i] * weight[j]
+        # torch.outer(a, b) 矩阵中位置 (i, j) 的元素 = a[i] * b[j]
+        weight_matrix = torch.sqrt(torch.outer(self.shared_svd_weight, self.shared_svd_weight)) #
+        # return self.shared_svd_reg_lambda * torch.mean((projected_delta * weight_matrix) ** 2) # 0.001
+        # 平均 topkxtop 后的效果不行 换成 /top 的
+        # 原来: sum / (topk * topk)
+        # 现在: sum / topk
+        topk = max(1, projected_delta.shape[0]) # topk
+        return self.shared_svd_reg_lambda * torch.sum(
+            (projected_delta * weight_matrix) ** 2
+        ) / topk
+
+    def apply_shared_svd_ogd_to_grads(self):
+        if not self._uses_shared_svd_ogd():
+            return
+        if self.task_id == 0 or not bool(self.shared_svd_ready.item()): # Task 0 不需要保护（没有旧知识）
+            return
+        if self.B_shared.grad is None:
+            return
+        with torch.no_grad():
+            """
+                # 原始梯度
+                grad = ∇_parallel + ∇_perp
+                
+                # 计算平行分量（投影）
+                protected_grad = ∇_parallel = P(grad)
+                
+                # 移除平行分量，只保留正交分量
+                grad = grad - protected_grad = ∇_perp
+            """
+            grad = self.B_shared.grad # [512,468] 反向传播计算出的原始梯度
+            # 计算需要保护的梯度分量
+            ## Step 1: 投影到SVD子空间 self.shared_svd_U.T @ grad @ self.shared_svd_V
+            ## [topk, 512] @ [512, 468] @ [468, topk] = [topk, topk] UV,旧任务的重要方向
+            projected = self.shared_svd_U.T @ grad @ self.shared_svd_V # [20,20] 在重要方向上的梯度
+            ## Step 2: 投影回原始空间
+            ## [512, topk] @ [topk, topk] @ [topk, 468] = [512, 468]
+            protected_grad = self.shared_svd_U @ projected @ self.shared_svd_V.T
+            grad.sub_(protected_grad) # 从梯度中减去保护分量,移除了会影响旧任务的梯度分量,只保留与旧任务正交的梯度分量,参数更新只在"安全方向"上进行
+    ####################add-5.7-end#########################
+    ####################add-5.8-start######################
+    # 检查是否启用EWC正则化
+    def _uses_shared_param_regularization(self):
+        return (
+                self._uses_shared_core() # 使用共享B
+                and self.shared_param_reg_mode == "ewc_grad"
+                and self.shared_param_reg_lambda > 0 # 正则化强度
+                and self.shared_rank > 0 # 共享维度数
+        )
+
+    # 计算EWC正则化损失
+    def shared_param_regularization(self):
+        if not self._uses_shared_param_regularization():
+            return self.B_shared.new_tensor(0.0) # 不启用EWC，返回0损失
+        if self.task_id == 0 or not bool(self.shared_param_ready.item()):
+            return self.B_shared.new_tensor(0.0) # Task 0：没有旧任务需要保护
+        delta = self.B_shared - self.shared_param_anchor_B # shared_param_anchor_B：上一个任务结束时的参数（锚点）
+        return self.shared_param_reg_lambda * torch.sum(self.shared_param_importance * delta.pow(2))
+
+    # 累积参数重要性（在训练过程中调用）
+    # EWC 先在训练时累计 B_shared.grad^2，作为参数重要性估计
+    def accumulate_shared_param_importance(self):
+        if not self._uses_shared_param_regularization():
+            return
+        if self.B_shared.grad is None:
+            return
+        with torch.no_grad(): # accum←accum+∇^2 -- 梯度平方越大，说明参数对损失函数越敏感，越重要
+            self.shared_param_importance_accum.add_(self.B_shared.grad.detach().pow(2))
+            self.shared_param_importance_steps.add_(1.0) # 记录累积了多少次梯度
+    # 任务结束时更新重要性（在 end_task() 中调用）
+    def update_shared_param_importance(self):
+        if not self._uses_shared_param_regularization(): #
+            return
+        if self.shared_param_importance_steps.item() <= 0:
+            self.shared_param_anchor_B.copy_(self.B_shared.detach()) # 直接保存当前参数作为锚点
+            self.shared_param_ready.fill_(True)
+            return
+        with torch.no_grad():
+            task_importance = self.shared_param_importance_accum / ( # 计算当前任务的平均梯度平方-->参数在当前任务中的平均敏感度
+                        self.shared_param_importance_steps + self.importance_eps)
+            task_importance = task_importance / (task_importance.mean() + self.importance_eps)
+            if not bool(self.shared_param_ready.item()) or torch.count_nonzero(
+                    self.shared_param_importance).item() == 0:
+                updated_importance = task_importance
+            else: # 指数移动平均（Task 1+） 平滑地累积多个任务的重要性
+                updated_importance = (
+                        self.shared_param_importance_beta * self.shared_param_importance
+                        + (1 - self.shared_param_importance_beta) * task_importance
+                ) # EMA融合
+            updated_importance = updated_importance / (updated_importance.mean() + self.importance_eps)
+            self.shared_param_importance.copy_(updated_importance) # 更新
+            self.shared_param_anchor_B.copy_(self.B_shared.detach())
+            self.shared_param_importance_accum.zero_()
+            self.shared_param_importance_steps.zero_()
+            self.shared_param_ready.fill_(True)
+    ####################add-5.8-end#########################

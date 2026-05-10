@@ -131,6 +131,16 @@ class BofaAdapter(BaseNet):
             importance_alpha=args.get("importance_alpha", 1.0), # 1.0
             ####################add-5.5-end######################
             first_task_rank=args.get("first_task_rank", -1),
+            ####################add-5.7-start######################
+            shared_svd_reg_lambda=args.get("shared_svd_reg_lambda", 0.0),
+            shared_svd_reg_topk=args.get("shared_svd_reg_topk", 20),
+            shared_svd_grad_mode=args.get("shared_svd_grad_mode", "none"),
+            ####################add-5.7-end#########################
+            ####################add-5.8-start######################
+            shared_param_reg_mode=args.get("shared_param_reg_mode", "none"),
+            shared_param_reg_lambda=args.get("shared_param_reg_lambda", 0.0),
+            shared_param_importance_beta=args.get("shared_param_importance_beta", 0.9),
+            ####################add-5.8-end#########################
         )
         ####################add-4.27-end########################
         self.use_up_cov = args["use_up_cov"]
@@ -396,3 +406,19 @@ class BofaAdapter(BaseNet):
     def apply_shared_importance_to_grads(self):
         self.olf_layer.apply_shared_importance_to_grads()
     ####################add-5.5-end######################
+
+    ####################add-5.7-start######################
+    def shared_svd_regularization(self):
+        return self.olf_layer.shared_svd_regularization()
+
+    def apply_shared_svd_ogd_to_grads(self):
+        self.olf_layer.apply_shared_svd_ogd_to_grads()
+    ####################add-5.7-end#########################
+
+    ####################add-5.8-start######################
+    def shared_param_regularization(self):
+        return self.olf_layer.shared_param_regularization()
+
+    def accumulate_shared_param_importance(self):
+        self.olf_layer.accumulate_shared_param_importance()
+    ####################add-5.8-end#########################

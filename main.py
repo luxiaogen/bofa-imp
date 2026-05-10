@@ -86,6 +86,26 @@ def setup_parser():
     parser.add_argument("--importance_beta", type=float, default=0.9, help="EMA decay for shared importance.")
     parser.add_argument("--importance_alpha", type=float, default=1.0, help="Strength of shared gradient suppression.")
     ####################add-5.5-end######################
+    ####################add-5.7-start######################
+    parser.add_argument("--shared_svd_reg_lambda", type=float, default=0.0,
+                        help="Regularization strength for preserving top-k SVD directions of B_shared.")
+    parser.add_argument("--shared_svd_reg_topk", type=int, default=20,
+                        help="Number of top singular directions of B_shared to preserve.")
+    parser.add_argument("--shared_svd_grad_mode",type=str,default="none",choices=["none", "ogd_project"],help="Gradient projection mode for preserving top-k SVD directions of B_shared.")
+    ####################add-5.7-end#########################
+    ####################add-5.8-start######################
+    parser.add_argument(
+        "--shared_param_reg_mode",
+        type=str,
+        default="none",
+        choices=["none", "ewc_grad"],
+        help="Parameter-level regularization mode for B_shared.",
+    )
+    parser.add_argument("--shared_param_reg_lambda", type=float, default=0.0,
+                        help="Regularization strength for EWC-style B_shared consolidation.")
+    parser.add_argument("--shared_param_importance_beta", type=float, default=0.9,
+                        help="EMA decay for EWC-style B_shared parameter importance.")
+    ####################add-5.8-end#########################
     return parser
 
 
