@@ -103,8 +103,8 @@ class BaseLearner(object):
             ret["top1"] = grouped["total"]
         else:
             grouped = accuracy(y_pred.T[0], y_true, self._known_classes)
-            ret["grouped"] = grouped
-            ret["top1"] = grouped["total"]
+            ret["grouped"] = grouped # 保存所有分组准确率
+            ret["top1"] = grouped["total"] # 保存总体Top-1准确率
             ret["top{}".format(self.topk)] = np.around((y_pred.T == np.tile(y_true, (self.topk, 1))).sum() * 100 / len(y_true), decimals=2)
         return ret
 
@@ -137,7 +137,7 @@ class BaseLearner(object):
                 zs_acc["grouped"]["total"]
 
             return cnn_accy, nme_accy, zs_seen, zs_unseen, zs_harmonic, zs_total
-        else:
+        else: # ✅
             cnn_accy = []
             for y_pred_i in y_pred:
                 # cnn_accy.append(self._evaluate(y_pred_i, y_true))
@@ -149,9 +149,9 @@ class BaseLearner(object):
 
 
             y_pred, y_true = self._eval_zero_shot()
-            zs_acc = self._evaluate_zs(y_pred, y_true)
+            zs_acc = self._evaluate_zs(y_pred, y_true) # zero-shot准确率
             zs_seen, zs_unseen, zs_harmonic, zs_total = zs_acc["grouped"]["old"], zs_acc["grouped"]["new"], zs_acc["grouped"]["harmonic"], zs_acc["grouped"][
-                "total"]
+                "total"] # 	分类头+原型匹配, None,Zero-Shot旧任务准确率,Zero-Shot新任务准确率,Zero-Shot调和平均,Zero-Shot总体准确率
             return cnn_accy, None, zs_seen, zs_unseen, zs_harmonic, zs_total
             
     def _eval_zero_shot(self):

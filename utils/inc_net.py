@@ -119,8 +119,6 @@ class BofaAdapter(BaseNet):
             subspace_policy=self.subspace_policy,
             basis_seed=args.get("basis_seed", 1993),
             basis_alloc=args.get("basis_alloc", "disjoint_block"),
-            basis_eps=args.get("basis_eps", 1e-4),
-            basis_zero_fix=args.get("basis_zero_fix", "near_zero_only"),
             ####################add-4.28-start######################
             shared_rank=args.get("shared_rank", -1),
             shared_lr_scale=args.get("shared_lr_scale", 0.1),
@@ -183,10 +181,10 @@ class BofaAdapter(BaseNet):
         new_classifier.bias.data = self.current_b
         new_classifier.weight.requires_grad = True
         new_classifier.bias.requires_grad = True
-        self.classifier_list.append(new_classifier)
+        self.classifier_list.append(new_classifier) # T个分类头
 
     def start_train(self, cls_num):
-        self.update_task(cls_num=cls_num)
+        self.update_task(cls_num=cls_num) # 增加一个新的分类头
         self.olf_layer.prepare_for_new_task()
 
     def prepare_stage2(self):
@@ -208,7 +206,7 @@ class BofaAdapter(BaseNet):
         if return_origin:
             origin_feature = input_features @ self.original_visual_proj
             return aligned_features, cls_results, origin_feature
-        else:
+        else: # 对齐后的图像特征:[bs,512], 分类头的输出 logits:[bs,20]
             return aligned_features, cls_results
     
     def encode_image_eval(self, x):

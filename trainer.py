@@ -12,6 +12,46 @@ import json
 # import wandb
 from datetime import datetime
 
+####################add-5.12-start#######################
+def _compact_float(value):
+    return "{:g}".format(float(value)).replace(".", "p")
+
+
+def _build_run_tag(args, timestamp):
+    parts = [timestamp, "seed{}".format(args["seed"])]
+    policy = args.get("subspace_policy", "data_oss")
+    policy_alias = {
+        "data_oss": "oss",
+        "fixed_svd_basis": "svd",
+        "fixed_svd_shared_core": "shared",
+    }.get(policy, policy)
+    parts.append(policy_alias)
+
+    if policy != "data_oss":
+        parts.append("Kt{}".format(args.get("Kt", 64)))
+    if policy == "fixed_svd_shared_core":
+        parts.append("sr{}".format(args.get("shared_rank", -1)))
+    if args.get("epoch") is not None:
+        parts.append("ep{}".format(args["epoch"]))
+    if args.get("center_type"):
+        parts.append("ct{}".format(args["center_type"]))
+    if args.get("text_relation_lambda", 0.0) > 0:
+        parts.append("rel{}".format(_compact_float(args["text_relation_lambda"])))
+    if args.get("shared_svd_reg_lambda", 0.0) > 0:
+        parts.append("svdl{}".format(_compact_float(args["shared_svd_reg_lambda"])))
+        parts.append("top{}".format(args.get("shared_svd_reg_topk", 20)))
+    if args.get("shared_svd_grad_mode", "none") != "none":
+        parts.append(args["shared_svd_grad_mode"])
+        parts.append("top{}".format(args.get("shared_svd_reg_topk", 20)))
+    if args.get("shared_param_reg_mode", "none") != "none":
+        parts.append(args["shared_param_reg_mode"])
+        parts.append("pl{}".format(_compact_float(args.get("shared_param_reg_lambda", 0.0))))
+    if args.get("shared_importance_mode", "none") != "none":
+        parts.append(args["shared_importance_mode"])
+        parts.append("ia{}".format(_compact_float(args.get("importance_alpha", 1.0))))
+    return "_".join(parts)
+####################add-5.12-end#######################
+
 ##########add.5.4-vis-start######################
 def _compute_tensor_metrics(tensor):
     return {
@@ -142,30 +182,30 @@ def _compute_b_summary(snapshot, previous_snapshot=None, eps=1e-8):
 
     return summary
 ######5.7-add-log-start##############################
-def _build_run_tag(args, timestamp):
-    parts = [
-        f"seed{args['seed']}",
-        args.get("subspace_policy", "data_oss"),
-        args.get("basis_alloc", "none"),
-        f"Kt{args.get('Kt', 'na')}",
-    ] # ['seed1993', 'fixed_svd_shared_core', 'shared_core_private_block', 'Kt498']
-
-    if args.get("shared_rank", -1) > 0:
-        parts.append(f"sr{args['shared_rank']}")
-
-    if args.get("shared_svd_grad_mode", "none") != "none":
-        parts.append(f"ogd{args.get('shared_svd_reg_topk', 20)}")
-
-    if args.get("shared_svd_reg_lambda", 0.0) > 0:
-        parts.append(f"svd{args.get('shared_svd_reg_topk', 20)}")
-        parts.append(f"lam{args['shared_svd_reg_lambda']}")
-
-    if args.get("shared_importance_mode", "none") != "none":
-        parts.append(f"impA{args.get('importance_alpha', 1.0)}B{args.get('importance_beta', 0.9)}")
-
-    parts.append(f"ep{args.get('tuned_epoch', 'na')}")
-    parts.append(timestamp)
-    return "_".join(str(p).replace("/", "-") for p in parts)
+# def _build_run_tag(args, timestamp):
+#     parts = [
+#         f"seed{args['seed']}",
+#         args.get("subspace_policy", "data_oss"),
+#         args.get("basis_alloc", "none"),
+#         f"Kt{args.get('Kt', 'na')}",
+#     ] # ['seed1993', 'fixed_svd_shared_core', 'shared_core_private_block', 'Kt498']
+#
+#     if args.get("shared_rank", -1) > 0:
+#         parts.append(f"sr{args['shared_rank']}")
+#
+#     if args.get("shared_svd_grad_mode", "none") != "none":
+#         parts.append(f"ogd{args.get('shared_svd_reg_topk', 20)}")
+#
+#     if args.get("shared_svd_reg_lambda", 0.0) > 0:
+#         parts.append(f"svd{args.get('shared_svd_reg_topk', 20)}")
+#         parts.append(f"lam{args['shared_svd_reg_lambda']}")
+#
+#     if args.get("shared_importance_mode", "none") != "none":
+#         parts.append(f"impA{args.get('importance_alpha', 1.0)}B{args.get('importance_beta', 0.9)}")
+#
+#     parts.append(f"ep{args.get('tuned_epoch', 'na')}")
+#     parts.append(timestamp)
+#     return "_".join(str(p).replace("/", "-") for p in parts)
 ######5.7-add-log-end##############################
 def _save_b_snapshot(model, analysis_dir, task_id, previous_snapshot=None):
     snapshot = model._network.olf_layer.get_b_snapshot()
@@ -201,7 +241,7 @@ def _train(args):
     if not os.path.exists(logs_name):
         os.makedirs(logs_name)
     # 添加时间戳，格式: YYYYMMDD_HHMMSS
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    timestamp = datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
     # logfilename = "logs/{}/{}/{}/{}/seed:{}_model:{}_{}".format(args["model_name"],
     #                                                          args["dataset"],
     #                                                          init_cls, args["increment"],
@@ -253,6 +293,12 @@ def _train(args):
     #max_curve = {"top1": []} #  基于 W_fusion
     #max2_curve = {"top1": []} # 基于 W_fusion2
 
+    # task acc  cnn_accy:模型训练后在各个任务上的分类准确率统计
+    top1_task_curve = {"top1": []}
+    top2_task_curve = {"top1": []}
+    top1_gda_task_curve = {"top1": []}
+    top2_gda_task_curve = {"top1": []}
+
     previous_b_snapshot = None # add-5.4
 
     for task in range(data_manager.nb_tasks): # 10 task
@@ -270,52 +316,76 @@ def _train(args):
 
         model.after_task()
 
-        # task acc
-        top1_task_curve = {"top1": []}
-        top2_task_curve = {"top1": []}
-        top1_gda_task_curve = {"top1": []}
-        top2_gda_task_curve = {"top1": []}
+        ####################add-5.13-start#########################
+        eval_items = [
+            ("CNN-Wfusion", cnn_accy[0], top1_curve, top1_task_curve),
+            ("CNN-Wfusion2", cnn_accy[1], top2_curve, top2_task_curve),
+            ("GDA-Wfusion", cnn_accy[2], top1_gda_curve, top1_gda_task_curve),
+            ("GDA-Wfusion2", cnn_accy[3], top2_gda_curve, top2_gda_task_curve),
+        ]
 
-        logging.info("Task Top1: {}".format(cnn_accy[0]["task_grouped"]))
-        top1_task_curve["top1"].append(cnn_accy[0]["task_top1"])
-        logging.info("CNN task top1 curve: {}".format(top1_task_curve["top1"]))
-        logging.info("Average Task Accuracy (CNN): {}".format(sum(top1_task_curve["top1"]) / len(top1_task_curve["top1"])))
+        for name, acc, class_curve, task_curve in eval_items:
+            logging.info("[Task Acc | %s] grouped: %s", name, acc["task_grouped"])
+            task_curve["top1"].append(acc["task_top1"])
+            logging.info("[Task Acc | %s] curve: %s", name, task_curve["top1"])
+            logging.info(
+                "[Task Acc | %s] average: %.4f",
+                name,
+                sum(task_curve["top1"]) / len(task_curve["top1"]),
+            )
 
-        logging.info("Task Top2: {}".format(cnn_accy[1]["task_grouped"]))
-        top2_task_curve["top1"].append(cnn_accy[1]["task_top1"])
-        logging.info("CNN task top2 curve: {}".format(top2_task_curve["top1"]))
-        logging.info("Average Task Accuracy (CNN Top2): {}".format(sum(top2_task_curve["top1"]) / len(top2_task_curve["top1"])))
+            logging.info("[Class Acc | %s] grouped: %s", name, acc["grouped"])
+            class_curve["top1"].append(acc["top1"])
+            logging.info("[Class Acc | %s] curve: %s", name, class_curve["top1"])
+            logging.info(
+                "[Class Acc | %s] average: %.4f",
+                name,
+                sum(class_curve["top1"]) / len(class_curve["top1"]),
+            )
+        ####################add-5.13-end###########################
 
-        logging.info("Task GDA Top1: {}".format(cnn_accy[2]["task_grouped"]))
-        top1_gda_task_curve["top1"].append(cnn_accy[2]["task_top1"])
-        logging.info("GDA task top1 curve: {}".format(top1_gda_task_curve["top1"]))
-        logging.info("Average Task Accuracy (GDA): {}".format(sum(top1_gda_task_curve["top1"]) / len(top1_gda_task_curve["top1"])))
 
-        logging.info("Task GDA Top2: {}".format(cnn_accy[3]["task_grouped"]))
-        top2_gda_task_curve["top1"].append(cnn_accy[3]["task_top1"])
-        logging.info("GDA task top2 curve: {}".format(top2_gda_task_curve["top1"]))
-        logging.info("Average Task Accuracy (GDA Top2): {}".format(sum(top2_gda_task_curve["top1"]) / len(top2_gda_task_curve["top1"])))
 
-        ##########################################################################
-        logging.info("Top1: {}".format(cnn_accy[0]["grouped"]))
-        top1_curve["top1"].append(cnn_accy[0]["top1"])
-        logging.info("CNN top1 curve: {}".format(top1_curve["top1"]))
-        logging.info("Average Accuracy (CNN): {}".format(sum(top1_curve["top1"]) / len(top1_curve["top1"])))
-
-        logging.info("Top2: {}".format(cnn_accy[1]["grouped"]))
-        top2_curve["top1"].append(cnn_accy[1]["top1"])
-        logging.info("CNN top2 curve: {}".format(top2_curve["top1"]))
-        logging.info("Average Accuracy (CNN Top2): {}".format(sum(top2_curve["top1"]) / len(top2_curve["top1"])))
-
-        logging.info("GDA Top1: {}".format(cnn_accy[2]["grouped"]))
-        top1_gda_curve["top1"].append(cnn_accy[2]["top1"])
-        logging.info("GDA top1 curve: {}".format(top1_gda_curve["top1"]))
-        logging.info("Average Accuracy (GDA): {}".format(sum(top1_gda_curve["top1"]) / len(top1_gda_curve["top1"])))
-
-        logging.info("GDA Top2: {}".format(cnn_accy[3]["grouped"]))
-        top2_gda_curve["top1"].append(cnn_accy[3]["top1"])
-        logging.info("GDA top2 curve: {}".format(top2_gda_curve["top1"]))
-        logging.info("Average Accuracy (GDA Top2): {}".format(sum(top2_gda_curve["top1"]) / len(top2_gda_curve["top1"])))
+        # logging.info("Task Top1: {}".format(cnn_accy[0]["task_grouped"]))
+        # top1_task_curve["top1"].append(cnn_accy[0]["task_top1"])
+        # logging.info("CNN task top1 curve: {}".format(top1_task_curve["top1"]))
+        # logging.info("Average Task Accuracy (CNN): {}".format(sum(top1_task_curve["top1"]) / len(top1_task_curve["top1"])))
+        #
+        # logging.info("Task Top2: {}".format(cnn_accy[1]["task_grouped"]))
+        # top2_task_curve["top1"].append(cnn_accy[1]["task_top1"])
+        # logging.info("CNN task top2 curve: {}".format(top2_task_curve["top1"]))
+        # logging.info("Average Task Accuracy (CNN Top2): {}".format(sum(top2_task_curve["top1"]) / len(top2_task_curve["top1"])))
+        #
+        # logging.info("Task GDA Top1: {}".format(cnn_accy[2]["task_grouped"]))
+        # top1_gda_task_curve["top1"].append(cnn_accy[2]["task_top1"])
+        # logging.info("GDA task top1 curve: {}".format(top1_gda_task_curve["top1"]))
+        # logging.info("Average Task Accuracy (GDA): {}".format(sum(top1_gda_task_curve["top1"]) / len(top1_gda_task_curve["top1"])))
+        #
+        # logging.info("Task GDA Top2: {}".format(cnn_accy[3]["task_grouped"]))
+        # top2_gda_task_curve["top1"].append(cnn_accy[3]["task_top1"])
+        # logging.info("GDA task top2 curve: {}".format(top2_gda_task_curve["top1"]))
+        # logging.info("Average Task Accuracy (GDA Top2): {}".format(sum(top2_gda_task_curve["top1"]) / len(top2_gda_task_curve["top1"])))
+        #
+        # ##########################################################################
+        # logging.info("Top1: {}".format(cnn_accy[0]["grouped"]))
+        # top1_curve["top1"].append(cnn_accy[0]["top1"])
+        # logging.info("CNN top1 curve: {}".format(top1_curve["top1"]))
+        # logging.info("Average Accuracy (CNN): {}".format(sum(top1_curve["top1"]) / len(top1_curve["top1"])))
+        #
+        # logging.info("Top2: {}".format(cnn_accy[1]["grouped"]))
+        # top2_curve["top1"].append(cnn_accy[1]["top1"])
+        # logging.info("CNN top2 curve: {}".format(top2_curve["top1"]))
+        # logging.info("Average Accuracy (CNN Top2): {}".format(sum(top2_curve["top1"]) / len(top2_curve["top1"])))
+        #
+        # logging.info("GDA Top1: {}".format(cnn_accy[2]["grouped"]))
+        # top1_gda_curve["top1"].append(cnn_accy[2]["top1"])
+        # logging.info("GDA top1 curve: {}".format(top1_gda_curve["top1"]))
+        # logging.info("Average Accuracy (GDA): {}".format(sum(top1_gda_curve["top1"]) / len(top1_gda_curve["top1"])))
+        #
+        # logging.info("GDA Top2: {}".format(cnn_accy[3]["grouped"]))
+        # top2_gda_curve["top1"].append(cnn_accy[3]["top1"])
+        # logging.info("GDA top2 curve: {}".format(top2_gda_curve["top1"]))
+        # logging.info("Average Accuracy (GDA Top2): {}".format(sum(top2_gda_curve["top1"]) / len(top2_gda_curve["top1"])))
 
         #logging.info("Max Top1: {}".format(cnn_accy[4]["grouped"]))
         #max_curve["top1"].append(cnn_accy[4]["top1"])

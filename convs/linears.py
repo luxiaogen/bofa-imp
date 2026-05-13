@@ -121,8 +121,6 @@ class OLF(nn.Module):
             subspace_policy="data_oss",
             basis_seed=1993,
             basis_alloc="disjoint_block",
-            basis_eps=1e-4,
-            basis_zero_fix="near_zero_only",
             ####################add-4.28-start######################
             shared_rank=-1,
             shared_lr_scale=0.1,
@@ -159,8 +157,7 @@ class OLF(nn.Module):
         self.subspace_policy = subspace_policy # 子空间的策略
         self.basis_seed = basis_seed # 1993
         self.basis_alloc = basis_alloc # disjoint_block 每个任务使用互不重叠的基底子空间 任务独立，避免遗忘 | 'front_loaded_block'
-        self.basis_eps = basis_eps # 0.001 修复接近零的特征值，避免数值不稳定
-        self.basis_zero_fix = basis_zero_fix # nero_zero_only 特征值修复策略
+
         ####################add-4.28-start######################
         self.shared_lr_scale = shared_lr_scale # 0.1
         ####################add-4.28-end########################
@@ -182,7 +179,7 @@ class OLF(nn.Module):
         self.shared_param_importance_beta = shared_param_importance_beta
         ####################add-5.8-end#########################
         self.total_tasks = None
-        self.fixed_basis_fixes = 0 # 记录修复的特征值数量
+
         self.active_slice = None
         #target_device = W0_torch.device if W0_torch.is_cuda else torch.device(
             #"cuda" if torch.cuda.is_available() else "cpu")
@@ -206,28 +203,27 @@ class OLF(nn.Module):
         ####################add-4.28-end########################
         # self.rank_capacity 768
         self.rank_capacity = self.in_features if self._uses_front_loaded_block() else self.rank # add-5.3
-        self.W_task = nn.Parameter(W0_torch.clone()) # 任务特定权重
+        self.W_task = nn.Parameter(W0_torch.clone()) # [512,768] 任务特定权重
         # self.B = nn.Parameter(torch.zeros(self.out_features, self.rank)) # [256,512]  [512,rank=64]
-        self.B = nn.Parameter(torch.zeros(self.out_features, self.rank_capacity)) # mod-5.3
+        self.B = nn.Parameter(torch.zeros(self.out_features, self.rank_capacity)) # [512,498] mod-5.3
 
         # self.A = torch.zeros(self.in_features, self.rank) # [768,256]
         ####################add-4.27-start######################
-        #self.register_buffer('A', torch.zeros(self.in_features, self.rank, device=self.W0.device)) # [768,64]
+        # [768,498]
         self.register_buffer('A', torch.zeros(self.in_features, self.rank_capacity, device=self.W0.device)) # mod-5.3
         self.register_buffer('fixed_basis', torch.empty(self.in_features, 0, device=self.W0.device))
-        self.register_buffer('fixed_spectrum', torch.empty(0, device=self.W0.device))
         ####################add-4.27-end########################
         ####################add-4.28-start######################
-        self.B_shared = nn.Parameter(torch.zeros(self.out_features, self.shared_rank, device=self.W0.device)) # [512, 32]：所有任务共享，持续更新
-        self.B_private = nn.Parameter(torch.zeros(self.out_features, self.private_rank, device=self.W0.device)) # [512, 32]：每个任务独有，任务切换时清零
-        self.register_buffer('shared_basis_block',torch.empty(self.in_features, self.shared_rank, device=self.W0.device))
-        self.register_buffer('private_basis_block',torch.empty(self.in_features, self.private_rank, device=self.W0.device))
+        self.B_shared = nn.Parameter(torch.zeros(self.out_features, self.shared_rank, device=self.W0.device)) # [512, 468]：所有任务共享，持续更新
+        self.B_private = nn.Parameter(torch.zeros(self.out_features, self.private_rank, device=self.W0.device)) # [512, 30]：每个任务独有，任务切换时清零
+        self.register_buffer('shared_basis_block',torch.empty(self.in_features, self.shared_rank, device=self.W0.device)) # 正交基 [768, 468]
+        self.register_buffer('private_basis_block',torch.empty(self.in_features, self.private_rank, device=self.W0.device)) # 正交基 [768, 30]
         ####################add-4.28-end########################
         ####################add-5.5-start######################
-        self.register_buffer('shared_importance', torch.zeros(self.shared_rank, device=self.W0.device)) # torch.Size([468])
-        self.register_buffer('shared_grad_scale', torch.ones(self.shared_rank, device=self.W0.device))
+        self.register_buffer('shared_importance', torch.zeros(self.shared_rank, device=self.W0.device)) # [468]
+        self.register_buffer('shared_grad_scale', torch.ones(self.shared_rank, device=self.W0.device)) # [468]
         ####################add-5.5-end######################
-        ####################add-5.7-start######################
+        ####################add-5.7 svd loss + grad svd-start######################
         self.shared_svd_topk = min(int(self.shared_svd_reg_topk), self.out_features, self.shared_rank) # min(20,512,468)
         self.register_buffer('shared_svd_anchor_B', # [512, 468] 锚点（参考点），通常是上一个任务结束时的 B_shared
                              torch.zeros(self.out_features, self.shared_rank, device=self.W0.device))
@@ -264,7 +260,7 @@ class OLF(nn.Module):
         # x[bs,768]
         if self.training:
             if self._uses_fixed_basis(): # 使用固定正交基 add-4.27
-                return F.linear(x, self._compose_task_weight())
+                return F.linear(x, self._compose_task_weight()) # [20,768]@[768,512]=[20,512]
             # 在训练时，使用当前的可训练参数 W_task
             if stage2:
                 return F.linear(x, self.W0+self.B @ self.A.T) # [512,768]+[512,256]@[256,768]=[512,768]
@@ -302,7 +298,7 @@ class OLF(nn.Module):
         # self.W_task.requires_grad = True
         ####################add-4.27-start######################
         self.start_eval = False
-        if self._uses_fixed_basis(): # 策略1: 使用固定基（新增的）
+        if self._uses_fixed_basis(): # 策略: 使用固定基
             # basis_start, basis_end = self._assign_task_subspace() # # 1. 分配子空间  # 例如: Task 0 → [0:64), Task 1 → [64:128), ...
             # self.B.data.zero_() # 2. 初始化 B 为 0
             # self.B.requires_grad = True # 3. 训练 B，冻结 W_task
@@ -441,33 +437,6 @@ class OLF(nn.Module):
     ####################add-4.28-start######################
     def set_total_tasks(self, total_tasks):
         self.total_tasks = total_tasks
-        if self._uses_fixed_basis():
-            valid_allocs = {"disjoint_block", "front_loaded_block", "shared_core_private_block"}
-            if self.basis_alloc not in valid_allocs:
-                raise ValueError(f"Unsupported basis_alloc: {self.basis_alloc}")
-
-        if self._uses_shared_core():
-            required = self.shared_rank + total_tasks * self.private_rank
-            if required > self.in_features:
-                raise ValueError(
-                    f"Shared-core capacity exceeded: total_tasks={total_tasks}, shared_rank={self.shared_rank}, "
-                    f"private_rank={self.private_rank}, required={required}, available={self.in_features}."
-                )
-        elif self._uses_front_loaded_block():
-            first_rank = self._get_task_rank(0)
-            required = first_rank + (total_tasks - 1) * self.rank
-            if first_rank <= 0 or required > self.in_features:
-                raise ValueError(
-                    f"Front-loaded capacity exceeded: total_tasks={total_tasks}, tail_rank={self.rank}, "
-                    f"computed first_task_rank={first_rank}, required={required}, available={self.in_features}."
-                )
-        elif self._uses_fixed_basis():
-            required = total_tasks * self.rank
-            if required > self.in_features:
-                raise ValueError(
-                    f"Fixed basis capacity exceeded: total_tasks={total_tasks}, rank={self.rank}, "
-                    f"required={required}, available={self.in_features}."
-                )
 
         ##########add.5.3-start######################
         # if self._uses_front_loaded_block(): # True
@@ -486,7 +455,7 @@ class OLF(nn.Module):
 
     def _uses_fixed_basis(self):
         #return self.subspace_policy in {"fixed_svd_basis", "fixed_fullrank_spectrum"}
-        return self.subspace_policy in {"fixed_svd_basis", "fixed_fullrank_spectrum", "fixed_svd_shared_core"}
+        return self.subspace_policy in {"fixed_svd_basis", "fixed_svd_shared_core"}
 
     ####################add-4.28-start######################
     def _uses_shared_core(self):
@@ -540,9 +509,7 @@ class OLF(nn.Module):
         #     )
 
         basis_block = self.fixed_basis[:, start:end] # task0:768,498
-        if self.subspace_policy == "fixed_fullrank_spectrum":
-            spectrum_block = self.fixed_spectrum[start:end].unsqueeze(0)
-            basis_block = basis_block * spectrum_block
+
         # self.A.copy_(basis_block)
         self.A.zero_()
         self.A[:, :active_rank].copy_(basis_block)
@@ -578,28 +545,14 @@ class OLF(nn.Module):
             U, S, Vh = torch.linalg.svd(random_matrix, full_matrices=True) # 需要完整的正交基时，比如某些理论分析、要保证 U 和 V 是标准正交方阵，或者后续运算要求 U 必须是方阵
             self.fixed_basis = U.to(self.W0.device) # U: [768, 768] [768] [768,768] - 正交矩阵 # 正交基
             self.fixed_spectrum = torch.ones(self.in_features, device=self.W0.device, dtype=self.W0.dtype) # 所有特征值都是 1
-        elif self.subspace_policy == "fixed_fullrank_spectrum": # 特征值分解
-            symmetric_matrix = 0.5 * (random_matrix + random_matrix.T) # 对称化随机矩阵 1/2*(A+A^T)
-            eigenvalues, eigenvectors = torch.linalg.eigh(symmetric_matrix) # 特征值分解
-            fixed_spectrum = self._repair_spectrum(eigenvalues) # 修复特征值
-            #
-            self.fixed_basis = eigenvectors.to(self.W0.device)  # 正交基
-            self.fixed_spectrum = fixed_spectrum.to(self.W0.device) # 修复后的特征值
 
-        ortho_error = torch.max(
-            torch.abs(
-                self.fixed_basis.T @ self.fixed_basis - torch.eye(self.in_features, device=self.fixed_basis.device))
-        ).item() # 正交矩阵应该满足: U^T @ U = I ortho_error 应该接近 0
-        print(ortho_error)
+        # ortho_error = torch.max(
+        #     torch.abs(
+        #         self.fixed_basis.T @ self.fixed_basis - torch.eye(self.in_features, device=self.fixed_basis.device))
+        # ).item() # 正交矩阵应该满足: U^T @ U = I ortho_error 应该接近 0
+        # print(ortho_error)
 
-    def _repair_spectrum(self, eigenvalues):
-        fixed = eigenvalues.clone() # [768]
-        near_zero_mask = fixed.abs() < self.basis_eps #  修复无限接近于零的特征值
-        if near_zero_mask.any():
-            signs = torch.where(fixed >= 0, torch.ones_like(fixed), -torch.ones_like(fixed))
-            fixed[near_zero_mask] = signs[near_zero_mask] * self.basis_eps
-        self.fixed_basis_fixes = int(near_zero_mask.sum().item())
-        return fixed.to(self.W0.dtype)
+
     ####################add-4.27-end########################
     ##########add.5.3-start######################
     def _uses_front_loaded_block(self):
@@ -695,8 +648,8 @@ class OLF(nn.Module):
         if self.shared_rank <= 0:
             return
         with torch.no_grad():
-            # 步骤1: 计算每列的L2范数（衡量每个共享维度的重要性）
-            col_norm = torch.norm(self.B_shared.detach(), dim=0) # [512,468]->[468]
+            # 步骤1: 计算每列(竖着算)的L2范数（B_shared[:, j] 很大，说明模型在第 j 个共享方向上学到了较强的修正量，也就是这个方向被更多使用。反过来，如果这一列接近 0，说明这个共享方向几乎没贡献）
+            col_norm = torch.norm(self.B_shared.detach(), dim=0) # [512,468]->[468] | col_norm[j] = sqrt(Σ_i B_shared[i, j]^2)
             # 步骤2: 指数移动平均更新重要性
             if self.task_id == 0 and torch.count_nonzero(self.shared_importance).item() == 0:
                 updated_importance = col_norm # 初始化
@@ -711,10 +664,10 @@ class OLF(nn.Module):
             # grad_scale = 1.0 / (1.0 + self.importance_alpha * norm_importance) # 保护这个知识不被后续任务破坏
             # 步骤5: 二次归一化   反比例缩放
             grad_scale = 1.0 / (1.0 + self.importance_alpha * norm_importance)
-            grad_scale = grad_scale / (grad_scale.mean() + self.importance_eps) # [468]
+            # grad_scale = grad_scale / (grad_scale.mean() + self.importance_eps) # [468]
             # grad_scale = grad_scale / (grad_scale.mean() + self.importance_eps)
-            self.shared_grad_scale.copy_(grad_scale.clamp_(0.0, 2.0))
-            # self.shared_grad_scale.copy_(grad_scale.clamp_(0.0, 1.0))
+            # self.shared_grad_scale.copy_(grad_scale.clamp_(0.0, 2.0))
+            self.shared_grad_scale.copy_(grad_scale.clamp_(0.0, 1.0))
     ####################add-5.5-end######################
     ####################add-5.7-start######################
     def _uses_shared_svd_regularization(self):
@@ -759,7 +712,7 @@ class OLF(nn.Module):
         # 现在: sum / topk
         topk = max(1, projected_delta.shape[0]) # topk
         return self.shared_svd_reg_lambda * torch.sum(
-            (projected_delta * weight_matrix) ** 2
+            (projected_delta * weight_matrix) ** 2 # F 范数，本质上是为了度量这个矩阵整体变化有多大
         ) / topk
 
     def apply_shared_svd_ogd_to_grads(self):
@@ -784,6 +737,8 @@ class OLF(nn.Module):
             # 计算需要保护的梯度分量
             ## Step 1: 投影到SVD子空间 self.shared_svd_U.T @ grad @ self.shared_svd_V
             ## [topk, 512] @ [512, 468] @ [468, topk] = [topk, topk] UV,旧任务的重要方向
+            ### self.shared_svd_U.copy_(U[:, :topk])
+            ### self.shared_svd_V.copy_(Vh[:topk, :].T)
             projected = self.shared_svd_U.T @ grad @ self.shared_svd_V # [20,20] 在重要方向上的梯度
             ## Step 2: 投影回原始空间
             ## [512, topk] @ [topk, topk] @ [topk, 468] = [512, 468]

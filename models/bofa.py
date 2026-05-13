@@ -21,7 +21,7 @@ class Learner(BaseLearner):
         self.args = args
 
         self._train_transformer = False
-        self._network = BofaAdapter(args)
+        self._network = BofaAdapter(args) # CLIP
         self._network.eval()
 
         self.batch_size = get_attribute(args, "batch_size", 48)
@@ -38,6 +38,11 @@ class Learner(BaseLearner):
         self.last_mask = get_attribute(args, "last_mask", False) # False
         self.use_up_cen = get_attribute(args, "use_up_cen", False) # True 每个 batch 动态更新类别中心，使用指数移动平均 img_proto = 0.95 * img_proto + 0.05 * new_proto
         self.center_type = get_attribute(args, "center_type", "mix") # 混合图像+文本 控制使用哪种类别中心进行分类
+        ####################add-5.12-start#########################
+        # self.proto_select_mode = get_attribute(args, "proto_select_mode", "none") # topk_pairwise_mix
+        # self.proto_select_topk = get_attribute(args, "proto_select_topk", 0)
+        # self.proto_select_tau = get_attribute(args, "proto_select_tau", 0.07)
+        ####################add-5.12-end###########################
         self.t_lam = 0
         self.stat = args['stat']
         self.label2task = []
@@ -53,6 +58,47 @@ class Learner(BaseLearner):
         for classname in classnames:
             batch_des.append(classname + ' with ' + random.choice(des_file[classname]).lower())
         return batch_des
+
+    ####################add-5.12-start#########################
+    # def _normalize_proto(self, proto):
+    #     return proto / proto.norm(dim=-1, keepdim=True).clamp_min(1e-12)
+    #
+    # def _build_mix_proto(self, img_proto, text_proto, lam=None):
+    #     lam = self.t_lam if lam is None else lam # 0.55
+    #     img_proto = self._normalize_proto(img_proto)
+    #     text_proto = self._normalize_proto(text_proto)
+    #
+    #     if self.proto_select_mode == "none" or self.proto_select_topk <= 0:
+    #         return lam * img_proto + (1 - lam) * text_proto # 原来的那一种混合prototype，不做调整
+    #
+    #     topk = min(int(self.proto_select_topk), img_proto.shape[0])
+    #     tau = max(float(self.proto_select_tau), 1e-6) # 温度
+    #     sim = text_proto @ img_proto.t() # [20,20] 第 i 个文本原型 和 第 j 个图像原型 有多像
+    #     topk_values, topk_indices = torch.topk(sim, k=topk, dim=1) #
+    #     topk_weight = torch.softmax(topk_values / tau, dim=1) # [C=20,topk=3]
+    #     selected_img_proto = img_proto[topk_indices] # [C=20,topk=3,512]  语义邻居融合 图像与文本最相近的 topk 个图像原型
+    #
+    #     if self.proto_select_mode == "topk_image_then_mix":
+    #         selective_img_proto = (topk_weight.unsqueeze(-1) * selected_img_proto).sum(dim=1) # [20,512]
+    #         selective_img_proto = self._normalize_proto(selective_img_proto)
+    #         return lam * selective_img_proto + (1 - lam) * text_proto
+    #
+    #     if self.proto_select_mode == "topk_pairwise_mix":
+    #         text_proto_expand = text_proto.unsqueeze(1).expand(-1, topk, -1) # [20,512]->[20,topk=3,512]
+    #         pairwise_proto = lam * selected_img_proto + (1 - lam) * text_proto_expand # [20,topk=3,512]
+    #         pairwise_proto = self._normalize_proto(pairwise_proto)
+    #         cls_proto = (topk_weight.unsqueeze(-1) * pairwise_proto).sum(dim=1) # [20,512]
+    #         return self._normalize_proto(cls_proto)
+
+        # raise ValueError("Unknown proto_select_mode: {}".format(self.proto_select_mode))
+
+    # def _build_cls_proto(self, img_proto, text_proto):
+    #     if self.center_type == "img":
+    #         return self._normalize_proto(img_proto)
+    #     if self.center_type == "text":
+    #         return self._normalize_proto(text_proto)
+    #     return self._build_mix_proto(img_proto, text_proto)
+    ####################add-5.12-end###########################
 
     def incremental_train(self, data_manager):
         self._cur_task += 1
@@ -125,7 +171,13 @@ class Learner(BaseLearner):
 
         for lam in lambdas: # [0.0, 0.05, 0.1, ..., 1.0]:  # 21 个候选值
             # 融合原型
-            new_proto = (1 - lam) * image_proto + lam * text_proto   # [C, D]
+            new_proto = (1 - lam) * image_proto + lam * text_proto   # [C, D] # mod-5.12
+            ####################add-5.12-start#########################
+            # if self.proto_select_mode == "none" or self.proto_select_topk <= 0:
+            #     new_proto = (1 - lam) * image_proto + lam * text_proto  # [C, D]
+            # else:
+            #     new_proto = self._build_mix_proto(image_proto, text_proto, lam=lam.item())  # [C, D]
+            ####################add-5.12-end###########################
             logits = all_feats @ new_proto.T.cpu()   # [N, C]
             pred = logits.argmax(dim=1)
 
@@ -164,7 +216,14 @@ class Learner(BaseLearner):
             # 3. 搜索最佳 λ
             self.t_lam = self.search_lambda_for_prompt(train_loader, image_proto, self.text_proto)
         new_proto = image_proto / image_proto.norm(dim=-1, keepdim=True) * (1 - self.t_lam) + \
-            self.text_proto / self.text_proto.norm(dim=-1, keepdim=True) * self.t_lam
+           self.text_proto / self.text_proto.norm(dim=-1, keepdim=True) * self.t_lam # mod-5.12
+        # ####################add-5.12-start#########################
+        # if self.proto_select_mode == "none" or self.proto_select_topk <= 0:
+        #     new_proto = image_proto / image_proto.norm(dim=-1, keepdim=True) * (1 - self.t_lam) + \
+        #                 self.text_proto / self.text_proto.norm(dim=-1, keepdim=True) * self.t_lam
+        # else:
+        #     new_proto = self._build_cls_proto(image_proto, self.text_proto)
+        ####################add-5.12-end###########################
         test_acc_lam = self.eval_init(test_loader, new_proto)
         logging.info("Eval Test Loader: Zero_Shot_Lam: {:.2f}".format(test_acc_lam))
 
@@ -194,19 +253,20 @@ class Learner(BaseLearner):
         total_epochs = self.tuned_epoch + self.stage2_epoch if self._network.uses_two_stage() else self.tuned_epoch
         prog_bar = tqdm(range(total_epochs))
         ####################add-4.27-end########################
-        templates = self.data_manager._data_to_prompt[0] # 'a photo of a {}.'
-        if self._cur_task > 0:
-            old_class = list(range(self.args['init_cls'] + (self._cur_task - 1) * self.args['increment']))
+        templates = self.data_manager._data_to_prompt[0] # 'a good photo of a {}.'
+        # if self._cur_task > 0:
+        #     old_class = list(range(self.args['init_cls'] + (self._cur_task - 1) * self.args['increment']))
         from utils.toolkit import ClipLoss
         cliploss = ClipLoss(img_only=True)
-        text_proto = self.text_proto # [10,512]
-        img_proto = self._network.get_cls_center() # [10,512]
+        text_proto = self.text_proto # [20,512]
+        img_proto = self._network.get_cls_center() # [20,512]
         for _, epoch in enumerate(prog_bar): # 17 epoch
             self._network.train_state()
             self._network.train()
             losses = 0.0
             loss_low = 0.0 # 低层分类损失 只在前6个epoch使用 让 OLF Layer 学会区分当前任务的类别
             loss_clip = 0.0
+
             correct, total = 0, 0
             # 判断是否进入 Stage 2
             #if epoch == self.tuned_epoch and self._cur_task > 0:
@@ -214,8 +274,8 @@ class Learner(BaseLearner):
                 self._network.prepare_stage2() # 激活 Stage 2 参数 B
             for i, (_, inputs, targets) in enumerate(train_loader):
                 if self.use_up_cen:
-                    new_proto = self._network.get_cls_center_last() # [10,512]
-                    img_proto = 0.95 * img_proto + 0.05 * new_proto # [10,512]
+                    new_proto = self._network.get_cls_center_last() # [20,512] 图像特征的均值mu经过桥接层
+                    img_proto = 0.95 * img_proto + 0.05 * new_proto # [20,512]
                 self.img_proto = img_proto
                 inputs = inputs.to(self._device)
                 targets = targets.to(self._device)
@@ -228,22 +288,23 @@ class Learner(BaseLearner):
                 #if epoch >= self.tuned_epoch and self._cur_task > 0:
                 if epoch >= self.tuned_epoch and self._cur_task > 0 and self._network.uses_two_stage(): # add-4.27
                     image_features, low_logits = self._network.encode_image(inputs, stage2=True, return_origin=False)
-                else: # [128,512]   [128,10]
+                else: # 对齐后的图像特征:[bs,512], 分类头的输出 logits:[bs,20]
                     image_features, low_logits = self._network.encode_image(inputs, return_origin=False)
-                low_logits = low_logits[-1]# [128,10]
-                if epoch < 6:
-                    low_loss = nn.functional.cross_entropy(low_logits, offset_targets)
+                low_logits = low_logits[-1]# [128,20] 当前任务的
+                if epoch < 6: # L_low = CE(low_logits, 当前任务内标签)
+                    low_loss = nn.functional.cross_entropy(low_logits, offset_targets) # 让 low_logits 这个分支也具备当前任务分类能力，属于辅助监督 cross_entropy：让真实类别对应的 logit 变大，其他类别的 logit 变小
                 img_feas = image_features / image_features.norm(dim=-1, keepdim=True)
                 if self.loss_type == "CE":
                     if self.center_type == "img":
                         cls_proto = img_proto / img_proto.norm(dim=-1, keepdim=True)
                     elif self.center_type == "text":
                         cls_proto = text_proto / text_proto.norm(dim=-1, keepdim=True)
-                    else: 
+                    else:
                         cls_proto = self.t_lam * (img_proto / img_proto.norm(dim=-1, keepdim=True)) + \
                             (1 - self.t_lam) * text_proto / text_proto.norm(dim=-1, keepdim=True)
+                    # cls_proto = self._build_cls_proto(img_proto, text_proto) # add-5.12
                     logits = self._network.model.logit_scale * img_feas @ cls_proto.t() # [128,512]@[10,512]
-                    clip_loss = nn.functional.cross_entropy(logits, targets)
+                    clip_loss = nn.functional.cross_entropy(logits, targets) # 交叉熵，图像特征和类别原型的相似度 logits
                 else:
                     labels = [class_to_label[y] for y in targets]
                     texts_clip = [templates.format(inst) for inst in labels]
@@ -251,6 +312,7 @@ class Learner(BaseLearner):
                     clip_text_norm = clip_text_feas.norm(dim=-1, keepdim=True)
                     clip_text_feas = clip_text_feas / clip_text_norm
                     clip_loss = cliploss(img_feas, clip_text_feas, logit_scale)
+
                 # 2.1 Low-level 损失 (前 6 个 epoch)
                 if epoch < 6:
                     #
@@ -263,6 +325,7 @@ class Learner(BaseLearner):
                 ####################add-5.8-start######################
                 loss = loss + self._network.shared_param_regularization()
                 ####################add-5.8-end#########################
+
 
                 optimizer.zero_grad()
                 loss.backward()
@@ -290,6 +353,7 @@ class Learner(BaseLearner):
             info = "Task {}, Epoch {}/{} => Loss_Clip {:.3f}, Train_acc {:.2f}".format(
                 # self._cur_task, epoch + 1, self.args['tuned_epoch'], loss_clip / len(train_loader), train_acc)
                 self._cur_task, epoch + 1, total_epochs, loss_clip / len(train_loader), train_acc)
+
             logging.info(info)
             prog_bar.set_description(info)
 
@@ -309,8 +373,13 @@ class Learner(BaseLearner):
         text_proto = text_features.to(self._device)
 
         img_proto = self.img_proto
+
         cls_proto = self.t_lam * (img_proto / img_proto.norm(dim=-1, keepdim=True)) + \
             (1 - self.t_lam) * text_proto / text_proto.norm(dim=-1, keepdim=True)
+
+        ####################add-5.12-start#########################
+        # cls_proto = self._build_cls_proto(img_proto, text_proto)
+        ####################add-5.12-end###########################
         cls_proto2 = self._network.get_cls_center_lora()
         cls_proto2 = cls_proto2 / cls_proto2.norm(dim=-1, keepdim=True)
         correct, correct_2, total = 0, 0, 0
@@ -418,7 +487,7 @@ class Learner(BaseLearner):
             cls_proto = img_proto / img_proto.norm(dim=-1, keepdim=True)
         elif self.center_type == "text":
             cls_proto = text_proto / text_proto.norm(dim=-1, keepdim=True)
-        else: 
+        else:
             if self.use_up_cen:
                 cls_proto = self.t_lam * (img_proto / img_proto.norm(dim=-1, keepdim=True)) + \
                     (1 - self.t_lam) * text_proto / text_proto.norm(dim=-1, keepdim=True)
@@ -426,7 +495,11 @@ class Learner(BaseLearner):
                 img_proto2 = self._network.get_cls_center()
                 cls_proto = self.t_lam * (img_proto2 / img_proto2.norm(dim=-1, keepdim=True)) + \
                     (1 - self.t_lam) * text_proto / text_proto.norm(dim=-1, keepdim=True)
-
+        ####################add-5.12-start#########################
+        # if self.center_type == "mix" and not self.use_up_cen:
+        #     img_proto = self._network.get_cls_center()
+        # cls_proto = self._build_cls_proto(img_proto, text_proto)
+        ####################add-5.12-end###########################
         y_true = [] # 	真实标签
         y_pred = [] # Top1 预测 | W_fusion + 集成
         y_pred_gda = [] # 	Top2 预测 | W_fusion2 + 集成

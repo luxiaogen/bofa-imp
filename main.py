@@ -25,7 +25,7 @@ def main():
     # param["out_dir"] = wandb.run.dir
     param["out_dir"] = log_dir  # 使用本地路径
     if up_cen == 1: # Use Updated Center（使用更新的类别中心） 训练前统计类别中心 → 训练时每个batch更新中心 → 推理时使用优化后的中心
-        param["use_up_cen"] = True # 控制在训练时，类别中心（class prototype）是固定的还是动态更新的
+        param["use_up_cen"] = True # 控制在训练时，类别中心（class prototype）是固定的还是动态更新的 EMA update
     else:
         param["use_up_cen"] = False # 训练前统计类别中心 → 训练时使用固定中心 → 推理时使用固定中心
     param["use_up_cov"] = True
@@ -61,14 +61,13 @@ def setup_parser():
         type=str,
         default="data_oss",
         # choices=["data_oss", "fixed_svd_basis", "fixed_fullrank_spectrum"],
-        choices=["data_oss", "fixed_svd_basis", "fixed_fullrank_spectrum", "fixed_svd_shared_core"],
+        choices=["data_oss", "fixed_svd_basis", "fixed_svd_shared_core"],
         help="Subspace construction policy for OLF.",
     )
     parser.add_argument("--basis_seed", type=int, default=1993, help="Random seed for fixed basis generation.")
     parser.add_argument("--basis_alloc", type=str, default="disjoint_block", help="Task subspace allocation policy.")
-    parser.add_argument("--basis_eps", type=float, default=1e-4,
-                        help="Minimum absolute eigenvalue for full-rank spectrum.")
-    parser.add_argument("--basis_zero_fix", type=str, default="near_zero_only", help="Spectrum repair policy.")
+
+
     ####################add-4.28-start######################
     parser.add_argument("--shared_rank", type=int, default=-1, help="Shared-core rank for fixed_svd_shared_core.")
     parser.add_argument("--shared_lr_scale", type=float, default=0.1,help="Learning-rate scale for shared-core updates.")
@@ -106,6 +105,20 @@ def setup_parser():
     parser.add_argument("--shared_param_importance_beta", type=float, default=0.9,
                         help="EMA decay for EWC-style B_shared parameter importance.")
     ####################add-5.8-end#########################
+    ####################add-5.12-start#########################
+    # parser.add_argument(
+    #     "--proto_select_mode",
+    #     type=str,
+    #     default="none",
+    #     choices=["none", "topk_image_then_mix", "topk_pairwise_mix"],
+    #     help="Optional text-guided top-k image prototype fusion mode for center_type=mix.",
+    # )
+    # parser.add_argument("--proto_select_topk", type=int, default=0,
+    #                     help="Top-k image prototypes selected by each text prototype. 0 disables selection.")
+    # parser.add_argument("--proto_select_tau", type=float, default=0.07,
+    #                     help="Softmax temperature for text-guided top-k prototype selection.")
+    ####################add-5.12-end###########################
+
     return parser
 
 
