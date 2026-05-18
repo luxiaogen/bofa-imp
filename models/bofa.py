@@ -100,6 +100,20 @@ class Learner(BaseLearner):
     #     return self._build_mix_proto(img_proto, text_proto)
     ####################add-5.12-end###########################
 
+    ###########################add-5.13-care-moe-start###########################
+    def _normalize_proto(self, proto):
+        return proto / proto.norm(dim=-1, keepdim=True).clamp_min(1e-12)
+
+    def _build_cls_proto(self, img_proto, text_proto):
+        img_proto = self._normalize_proto(img_proto)
+        text_proto = self._normalize_proto(text_proto)
+        if self.center_type == "img":
+            return img_proto
+        if self.center_type == "text":
+            return text_proto
+        return self.t_lam * img_proto + (1 - self.t_lam) * text_proto
+    ###########################add-5.13-care-moe-end#############################
+
     def incremental_train(self, data_manager):
         self._cur_task += 1
         self._total_classes = self._known_classes + data_manager.get_task_size(self._cur_task)
@@ -191,6 +205,7 @@ class Learner(BaseLearner):
         print(f"\n>>> best λ = {best_lam:.3f}")
         return best_lam
     ################################Step 3: 初始化准确率评估######################################
+    # 搜索最佳融合系数 λ
     def init_accuracy(self, train_loader, test_new_loader, test_loader):
         """
             搜索最佳的图像-文本融合系数 λ
@@ -213,7 +228,7 @@ class Learner(BaseLearner):
         # 使用之前计算的类别中心投影到 CLIP 空间
         image_proto = self._network.get_cls_center() # [10,512]
         if self.t_lam == 0:
-            # 3. 搜索最佳 λ
+            # 3. 搜索最佳 λ 网格搜索 λ ∈ [0, 1]，步长 0.05
             self.t_lam = self.search_lambda_for_prompt(train_loader, image_proto, self.text_proto)
         new_proto = image_proto / image_proto.norm(dim=-1, keepdim=True) * (1 - self.t_lam) + \
            self.text_proto / self.text_proto.norm(dim=-1, keepdim=True) * self.t_lam # mod-5.12
@@ -331,11 +346,14 @@ class Learner(BaseLearner):
                 loss.backward()
 
                 ####################add-5.5-start######################
+                # 梯度保护 1: OGD 投影 — 移除会破坏旧任务的梯度分量
                 self._network.apply_shared_svd_ogd_to_grads()
+                # 梯度保护 2: 重要性缩放 — 重要方向的梯度被缩小
                 self._network.apply_shared_importance_to_grads()
                 ####################add-5.5-end######################
 
                 ####################add-5.8-start######################
+                # 重要性累积（用于 EWC） --- 效果不行
                 self._network.accumulate_shared_param_importance()
                 ####################add-5.8-end#########################
 
@@ -481,20 +499,43 @@ class Learner(BaseLearner):
             text_features = torch.stack(text_features, dim=0) # [所有已经学过的类别e.g.=20,512]
         text_proto = text_features.to(self._device) # [20,512]
 
-        
-        img_proto = self._network.get_cls_center_lora() # [20,512]
-        if self.center_type == "img":
-            cls_proto = img_proto / img_proto.norm(dim=-1, keepdim=True)
-        elif self.center_type == "text":
-            cls_proto = text_proto / text_proto.norm(dim=-1, keepdim=True)
-        else:
-            if self.use_up_cen:
-                cls_proto = self.t_lam * (img_proto / img_proto.norm(dim=-1, keepdim=True)) + \
-                    (1 - self.t_lam) * text_proto / text_proto.norm(dim=-1, keepdim=True)
+        ###########################add-5.13-care-moe-start###########################
+        if self._network.uses_private_route(): # img_proto1[c] = mu[c] @ (W0 + shared_delta + private_delta(task(c))).T | img_proto2[c] = 0.5 * img_proto1[c] + 0.5 * (mu[c] @ W0.T)
+            img_proto1, img_proto2 = self._network.get_cls_center_lora_routed() #
+            cls_proto1 = self._build_cls_proto(img_proto1, text_proto) # 用“纯 routed 图像原型”去构造最终类别原型
+            cls_proto2 = self._build_cls_proto(img_proto2, text_proto) # 用“routed + 原始 W0 混合后的图像原型”去构造最终类别原型
+        else: # 用统一的 W_fusion,对所有类别一视同仁,不看这个类别属于哪个任务,也不加 private_delta
+            img_proto = self._network.get_cls_center_lora()  # [20,512]  img_proto[c] = mu[c] @ W_fusion.T
+            if self.center_type == "img":
+                cls_proto = img_proto / img_proto.norm(dim=-1, keepdim=True)
+            elif self.center_type == "text":
+                cls_proto = text_proto / text_proto.norm(dim=-1, keepdim=True)
             else:
-                img_proto2 = self._network.get_cls_center()
-                cls_proto = self.t_lam * (img_proto2 / img_proto2.norm(dim=-1, keepdim=True)) + \
-                    (1 - self.t_lam) * text_proto / text_proto.norm(dim=-1, keepdim=True)
+                if self.use_up_cen:
+                    cls_proto = self.t_lam * (img_proto / img_proto.norm(dim=-1, keepdim=True)) + \
+                                (1 - self.t_lam) * text_proto / text_proto.norm(dim=-1, keepdim=True)
+                else:
+                    img_proto2 = self._network.get_cls_center()
+                    cls_proto = self.t_lam * (img_proto2 / img_proto2.norm(dim=-1, keepdim=True)) + \
+                                (1 - self.t_lam) * text_proto / text_proto.norm(dim=-1, keepdim=True)
+            cls_proto1 = cls_proto
+            cls_proto2 = cls_proto
+        ###########################add-5.13-care-moe-end#############################
+        ###########################mod-5.13-care-moe-start###########################
+        # img_proto = self._network.get_cls_center_lora() # [20,512]
+        # if self.center_type == "img":
+        #     cls_proto = img_proto / img_proto.norm(dim=-1, keepdim=True)
+        # elif self.center_type == "text":
+        #     cls_proto = text_proto / text_proto.norm(dim=-1, keepdim=True)
+        # else:
+        #     if self.use_up_cen:
+        #         cls_proto = self.t_lam * (img_proto / img_proto.norm(dim=-1, keepdim=True)) + \
+        #             (1 - self.t_lam) * text_proto / text_proto.norm(dim=-1, keepdim=True)
+        #     else:
+        #         img_proto2 = self._network.get_cls_center()
+        #         cls_proto = self.t_lam * (img_proto2 / img_proto2.norm(dim=-1, keepdim=True)) + \
+        #             (1 - self.t_lam) * text_proto / text_proto.norm(dim=-1, keepdim=True)
+        ###########################mod-5.13-care-moe-end#############################
         ####################add-5.12-start#########################
         # if self.center_type == "mix" and not self.use_up_cen:
         #     img_proto = self._network.get_cls_center()
@@ -517,9 +558,14 @@ class Learner(BaseLearner):
                     out_pred_gda 	GDA + 原型 + 集成
                     out_max      	类别原型 + argmax
                 """
-                out_pred, out_pred_gda,out_max = self.get_result(transf_image_features1, cls_proto, inputs, logits)
+                ###########################add-5.13-care-moe-start###########################
+                out_pred, out_pred_gda, out_max = self.get_result(transf_image_features1, cls_proto1, inputs, logits)
                 # shiyong w_fuse2 de
-                out_pred2, out_pred2_gda, out_max = self.get_result(transf_image_features2, cls_proto, inputs, logits)
+                out_pred2, out_pred2_gda, out_max = self.get_result(transf_image_features2, cls_proto2, inputs, logits)
+                ###########################add-5.13-care-moe-end#############################
+                # out_pred, out_pred_gda,out_max = self.get_result(transf_image_features1, cls_proto, inputs, logits)
+                # # shiyong w_fuse2 de
+                # out_pred2, out_pred2_gda, out_max = self.get_result(transf_image_features2, cls_proto, inputs, logits)
 
             y_true.append(targets.cpu().numpy())
             y_pred.append(out_pred.cpu().numpy())

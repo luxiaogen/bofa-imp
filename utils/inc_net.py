@@ -107,6 +107,12 @@ class BofaAdapter(BaseNet):
         self.hidden_dim_t = args["Kt"] # 256  安全正交子空间
         self.subspace_policy = args.get("subspace_policy", "data_oss") # add-4.27
 
+        ###########################add-5.13-care-moe-start###########################
+        self.private_route_mode = args.get("private_route_mode", "none") # task_topm
+        self.private_route_topm = args.get("private_route_topm", 1) # 3
+        self.private_route_tau = args.get("private_route_tau", 1.0) # 2.0
+        ###########################add-5.13-care-moe-end#############################
+
         from convs.linears import OLF as OLF
         # A:[768,256] B[256,512]
         # self.olf_layer = OLF(in_features=in_dim, out_features=out_dim, W0_torch=W0.T, rank=self.hidden_dim_t)
@@ -139,6 +145,10 @@ class BofaAdapter(BaseNet):
             shared_param_reg_lambda=args.get("shared_param_reg_lambda", 0.0),
             shared_param_importance_beta=args.get("shared_param_importance_beta", 0.9),
             ####################add-5.8-end#########################
+            ###########################add-5.14-shared_B_ema-start###########################
+            shared_ema_mode=args.get("shared_ema_mode", "none"),
+            shared_ema_beta=args.get("shared_ema_beta", 0.9),
+            ###########################add-5.14-shared_B_ema-end#############################
         )
         ####################add-4.27-end########################
         self.use_up_cov = args["use_up_cov"]
@@ -184,6 +194,13 @@ class BofaAdapter(BaseNet):
         self.classifier_list.append(new_classifier) # T个分类头
 
     def start_train(self, cls_num):
+        """
+        olf_layer.prepare_for_new_task()
+          → 分配子空间: shared [0:468), private [468+t*30 : 498+t*30)
+          → B_private 清零
+          → B_shared, B_private 设为可训练
+          → W_task 冻结
+        """
         self.update_task(cls_num=cls_num) # 增加一个新的分类头
         self.olf_layer.prepare_for_new_task()
 
@@ -217,9 +234,49 @@ class BofaAdapter(BaseNet):
         for cls in self.classifier_list:
             cls_results.append(cls(norm_input_features))
 
-        aligned_features = self.olf_layer.eval_forward(input_features)  # (batch, 512)
+        # aligned_features = self.olf_layer.eval_forward(input_features)  # (batch, 512) mod-5.13
+        ###########################add-5.13-care-moe-start###########################
+        if self.uses_private_route():
+            route_weight = self._build_private_route_weight(cls_results) # 算每个路由的weight
+            aligned_features = self.olf_layer.eval_forward_routed(input_features, route_weight)
+        else:
+            aligned_features = self.olf_layer.eval_forward(input_features)  # (batch, 512)
+        ###########################add-5.13-care-moe-end#############################
+
 
         return aligned_features, cls_results
+
+    ###########################add-5.13-care-moe-start###########################
+    def uses_private_route(self):
+        return (
+                self.private_route_mode == "task_topm"
+                and self.olf_layer.uses_shared_core()
+                and len(self.olf_layer.private_delta_list) > 0
+        )
+
+    def _build_private_route_weight(self, cls_results):
+        num_routes = min(len(cls_results), len(self.olf_layer.private_delta_list))
+        # if num_routes <= 0:
+        #     raise RuntimeError("private routing requires at least one task classifier and one private delta.")
+
+        scores = []
+        """
+            cls_results = [logits_task0, logits_task1, ...]
+            logits_task_t: [B, C_t]  — 第 t 个任务分类头的输出
+        """
+        for logits in cls_results[:num_routes]: # # 遍历每个任务的分类头
+            scores.append(torch.softmax(logits, dim=1).max(dim=1).values) # [B] 取最大softmax概率
+        scores = torch.stack(scores, dim=1) # # [B, T]  每个样本对每个任务的置信度
+
+        topm = min(max(int(self.private_route_topm), 1), num_routes) # 超参数，例如只选 top-1
+        tau = max(float(self.private_route_tau), 1e-6) # 温度参数   softmax 路由权重的温度
+        top_values, top_indices = torch.topk(scores, k=topm, dim=1) # [B, m]
+        top_weights = torch.softmax(top_values / tau, dim=1) # [B, m]
+
+        route_weight = scores.new_zeros(scores.shape)
+        route_weight.scatter_(1, top_indices, top_weights) # 只在 top-m 位置填入权重
+        return route_weight
+    ###########################add-5.13-care-moe-end#############################
 
     """
     计算类别统计信息
@@ -270,8 +327,7 @@ class BofaAdapter(BaseNet):
         mu_norm = torch.cat([vecs_norm[labels == i].mean(dim=0, keepdim=True) for i in range(known_classes, total_classes)], dim=0)
         center_vecs_norm = torch.cat([vecs_norm[labels == i] - mu_norm[i - known_classes]
                                      for i in range(known_classes, total_classes)], dim=0) # [5000,768]
-        # 3. 计算协方差矩阵
-        # 将所有样本减去各自类别中心
+        # 3. 计算协方差逆矩阵 (用于 GDA)
         cov_inv = center_vecs_norm.shape[1] * torch.linalg.pinv( # 计算协方差矩阵的逆=n * pinv((n-1) * Σ + trace(Σ) * I) | 求伪逆   (n-1) * Σ: 缩放因子+trace(Σ) * I: 对角线正则化（防止奇异）
             (center_vecs_norm.shape[0] - 1) * center_vecs_norm.T.cov() + center_vecs_norm.T.cov().trace() * torch.eye(center_vecs_norm.shape[1]).cuda())
         current_ps = torch.ones(mu_norm.shape[0]).cuda() * 1. / mu_norm.shape[0] # 计算先验概率 假设 每个类别的先验概率相等（均匀分布）
@@ -300,9 +356,16 @@ class BofaAdapter(BaseNet):
         # W: [C, 768] - GDA 分类器权重, b: [C] - GDA 分类器偏置
         # 用于后续的高斯判别分析分类 | GDA 假设每个类别的特征服从高斯分布，通过贝叶斯公式推导出的分类器可以写成线性形式 | GDA 分类器 → 转换为 → 线性分类器 (y = Wx + b)
         ps = torch.ones(self.mu_norm.shape[0]).cuda() * 1. / self.mu_norm.shape[0] # 计算先验概率 ps = [0.05, 0.05, ..., 0.05]  # 20个0.05
+        # GDA 分类器参数
         self.W = torch.einsum('nd, dc -> cn', self.mu_norm, self.cov_inv)
         self.b = ps.log() - torch.einsum('nd, dc, nc -> n', self.mu_norm, self.cov_inv, self.mu_norm) / 2
         self.task_id += 1
+        """
+            inputs [B,3,224,224] 
+              → ViT → image_features [B,768]
+              → 按类别分组 → mu [C,768], cov [768,768]
+              → GDA参数 → W [768,C], b [C]
+        """
 
     def sample_augmented_cls(self, classes: list, n: int):
         aug_features = []
@@ -344,6 +407,19 @@ class BofaAdapter(BaseNet):
             new_center = self.olf_layer(self.mu) # [20,512] 将原始特征空间（768维）的类别中心投影到 OLF Layer 输出空间（512维）
             self.olf_layer.train(training_state)
         return new_center # 20个类别在输出空间的中心
+
+    ###########################add-5.13-care-moe-start###########################
+    def get_cls_center_lora_routed(self):
+        with torch.no_grad():
+            if self.mu is None:
+                raise RuntimeError("Class centers are unavailable before update_stat().")
+            task_ids = [self.label2task[int(class_idx)] for class_idx in range(self.mu.shape[0])]
+            training_state = self.olf_layer.training
+            self.olf_layer.eval()
+            centers = self.olf_layer.get_routed_cls_center(self.mu, task_ids) # [n_c,512]
+            self.olf_layer.train(training_state)
+        return centers
+    ###########################add-5.13-care-moe-end#############################
 
     def get_param_group(self):
         param_groups = []

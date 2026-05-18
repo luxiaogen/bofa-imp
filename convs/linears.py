@@ -143,6 +143,10 @@ class OLF(nn.Module):
             shared_param_reg_lambda=0.0,
             shared_param_importance_beta=0.9,
             ####################add-5.8-end#########################
+            ###########################add-5.14-shared_B_ema-start###########################
+            shared_ema_mode="none",
+            shared_ema_beta=0.9,
+            ###########################add-5.14-shared_B_ema-end#############################
     ):
         super().__init__()
         self.in_features = in_features # 768
@@ -178,6 +182,10 @@ class OLF(nn.Module):
         self.shared_param_reg_lambda = shared_param_reg_lambda
         self.shared_param_importance_beta = shared_param_importance_beta
         ####################add-5.8-end#########################
+        ###########################add-5.14-shared_B_ema-start###########################
+        self.shared_ema_mode = shared_ema_mode
+        self.shared_ema_beta = shared_ema_beta
+        ###########################add-5.14-shared_B_ema-end#############################
         self.total_tasks = None
 
         self.active_slice = None
@@ -243,6 +251,12 @@ class OLF(nn.Module):
         self.register_buffer('shared_param_importance_steps', torch.tensor(0.0, device=self.W0.device))
         self.register_buffer('shared_param_ready', torch.tensor(False, device=self.W0.device))
         ####################add-5.8-end#########################
+        ###########################add-5.14-shared_B_ema-start###########################
+        # [512,468]
+        self.register_buffer('shared_ema_B', torch.zeros(self.out_features, self.shared_rank, device=self.W0.device))
+        #
+        self.register_buffer('shared_ema_ready', torch.tensor(False, device=self.W0.device))
+        ###########################add-5.14-shared_B_ema-end#############################
 
         self.W_task.requires_grad = False  # 初始时冻结
         self.W_fusion = W0_torch.clone().detach() # [512,768] mean(所有任务权重)
@@ -253,8 +267,12 @@ class OLF(nn.Module):
         self.task_id = 0
         self.start_eval = True
         ####################add-4.27######################
+        ###########################add-5.13-care-moe-start###########################
+        self.private_delta_list = []
+        ###########################add-5.13-care-moe-end#############################
         if self._uses_fixed_basis(): #  检查是否使用固定基底
             self._init_fixed_basis()
+
 
     def forward(self, x, stage2=False):
         # x[bs,768]
@@ -274,6 +292,62 @@ class OLF(nn.Module):
         # W_fusion  = mean(任务权重) = 只有训练任务的知识
         # W_fusion2 = mean(任务权重 + W0) = 训练任务 + CLIP 预训练的知识 ✅
         return (F.linear(x, self.W_fusion), F.linear(x, self.W_fusion2))
+
+    ###########################add-5.13-care-moe-start###########################
+    def _compose_shared_weight(self): # 得到共享权重
+        if not self._uses_shared_core():
+            return self.W0
+        return self.W0 + self.B_shared @ self.shared_basis_block.T
+    # 对测试样本 x 做 soft routing，可能混合多个任务 private delta
+    def eval_forward_routed(self, x, route_weight):
+        if not self._uses_shared_core() or len(self.private_delta_list) == 0:
+            return self.eval_forward(x)
+
+        route_weight = route_weight.to(device=x.device, dtype=x.dtype) # [bs,T] 样本对每个路由的权重
+        num_routes = min(route_weight.shape[1], len(self.private_delta_list))
+        route_weight = route_weight[:, :num_routes]
+        # 1. 共享部分：所有样本一样
+        routed_features = F.linear(x, self._compose_shared_weight())
+        # 2. 私有部分：每个任务的 private_delta 分别算一遍
+        private_outputs = [
+            F.linear(x, private_delta.to(device=x.device, dtype=x.dtype))
+            for private_delta in self.private_delta_list[:num_routes]
+        ]
+
+        # 3. 路由加权求和
+        #  route_weight:     [B, T]    → unsqueeze → [B, T, 1]
+        #  private_outputs:  [B, T, 512]
+        private_outputs = torch.stack(private_outputs, dim=1)
+        routed_features = routed_features + (route_weight.unsqueeze(-1) * private_outputs).sum(dim=1)
+
+        origin_features = F.linear(x, self.W0)
+        return routed_features, 0.5 * routed_features + 0.5 * origin_features # 为了保留一部分原始 CLIP 表征，防止路由过拟合
+    # 给每个类别中心 mu 选择它所属任务的 private adapter，然后算出“路由后的类别原型”
+    """
+        类别 0~9  → task_id=0 → 加 private_delta_list[0]
+        类别 10~19 → task_id=1 → 加 private_delta_list[1]
+    """
+    def get_routed_cls_center(self, mu, label2task):
+        # 1. 所有类别先过共享权重
+        if not self._uses_shared_core() or len(self.private_delta_list) == 0:
+            return self.eval_forward(mu)
+        # 路由中心
+        routed_center = F.linear(mu, self._compose_shared_weight()) # [num_classes, 512] 先对所有类别中心都走一遍共享权重
+        origin_center = F.linear(mu, self.W0) # 使用预训练模型的类中心
+        num_routes = len(self.private_delta_list) # 1
+        # 对每个类别，只加上它自己任务对应的 private delta
+
+        # 2. 每个类别只加自己任务的 private delta
+        for class_idx, task_idx in enumerate(label2task[: mu.shape[0]]):
+            task_idx = int(task_idx)
+            if 0 <= task_idx < num_routes:
+                private_delta = self.private_delta_list[task_idx].to(device=mu.device, dtype=mu.dtype)
+                routed_center[class_idx] = routed_center[class_idx] + F.linear(
+                    mu[class_idx:class_idx + 1], private_delta
+                ).squeeze(0) # 类别级别的 hard routing：每个类别明确知道自己来自哪个任务，就只用那个任务的私有增量
+        # 共享 core + 当前类别所属任务 private delta 后的类别中心, routed_center 和原始 CLIP 权重 W0 输出的平均，用来保留一部分原始 CLIP 表征，降低 private routing 过拟合或漂移
+        return routed_center, 0.5 * routed_center + 0.5 * origin_center
+    ###########################add-5.13-care-moe-end#############################
 
     def update_old_features(self, features):
         ####################add-4.27-start######################
@@ -369,28 +443,41 @@ class OLF(nn.Module):
         self.B_private.requires_grad = False
         ####################add-4.28-end########################
 
+        ###########################add-5.14-shared_B_ema-start###########################
+        self.update_shared_ema() # EMA 平滑 B_shared
+        ###########################add-5.14-shared_B_ema-end#############################
 
-        # 1. 保存当前任务权重
+
+
         if self._uses_fixed_basis(): # add-4.27
+            # 1. 保存当前任务权重
+            # W_t = W0 + B_shared@A_shared.T + B_private@A_private.T  # [512, 768]
             self.W_list.append(self._compose_task_weight().detach().clone()) # add-4.27
+            ###########################add-5.13-care-moe-start###########################
+            if self._uses_shared_core(): # [512, 30]@[768, 30]^T]=[512,768]
+                # 2. 保存私有增量（用于推理时路由）
+                private_delta = self.B_private.detach() @ self.private_basis_block.detach().T
+                self.private_delta_list.append(private_delta.clone()) # 当前任务训练完以后，这个任务自己的私有权重更新量,第 t 个任务学到的私有 LoRA/OLF 更新方向
+            ###########################add-5.13-care-moe-end#############################
         elif self.task_id == 0:
             self.W_list.append(self.W_task.data.clone().detach())
         else:
             diff_W = self.B @ self.A.T
             self.W_list.append(self.W0 + diff_W.detach().clone())
-        # 2. 融合所有任务权重
+        # 2. 融合所有任务权重 - 纯任务平均
         self.W_fusion = (sum(self.W_list)) / len(self.W_list)
-        # 3. 另一种融合方式（包含 W0）
+        # 3. 另一种融合方式（包含 W0）- 含原始 CLIP
         self.W_fusion2 = (sum(self.W_list)+self.W0) / (len(self.W_list)+1)
 
+        # 4. 更新各种保护机制
         ####################add-5.5-start######################
-        self.update_shared_importance()
+        self.update_shared_importance() # shared_grad_scale [468]
         ####################add-5.5-end######################
         ####################add-5.7-start######################
-        self.update_shared_svd_anchor()
+        self.update_shared_svd_anchor() # shared_svd_U/V      [512,20] / [468,20]
         ####################add-5.7-end#########################
         ####################add-5.8-start######################
-        self.update_shared_param_importance()
+        self.update_shared_param_importance() # EWC importance   [512,468]
         ####################add-5.8-end#########################
 
         self.task_id += 1
@@ -618,6 +705,14 @@ class OLF(nn.Module):
                     "shared_param_ready": bool(self.shared_param_ready.item()),
                     "shared_param_importance": self.shared_param_importance.detach().cpu().clone(),
                     ####################add-5.8-end#########################
+                    ###########################add-5.14-shared_B_ema-start###########################
+                    "shared_ema_mode": self.shared_ema_mode,
+                    "shared_ema_beta": float(self.shared_ema_beta),
+                    "shared_ema_ready": bool(self.shared_ema_ready.item()),
+                    "shared_ema_delta_norm": float(
+                        torch.norm(self.B_shared.detach() - self.shared_ema_B.detach(), p="fro").item()
+                    ) if bool(self.shared_ema_ready.item()) else 0.0,
+                    ###########################add-5.14-shared_B_ema-end#############################
                 }
             )
         else:
@@ -641,7 +736,9 @@ class OLF(nn.Module):
         if self.B_shared.grad is None or self.shared_grad_scale.numel() == 0:
             return # [512,468]@[1,468] | shared_grad_scale:一个缩放因子张量，用于调整不同维度的梯度大小
         self.B_shared.grad.mul_(self.shared_grad_scale.unsqueeze(0))
-
+    """
+        B_shared 中某一列的 L2 范数越大，说明该方向对旧任务越重要，后续任务在该方向上的梯度就应该越小
+    """
     def update_shared_importance(self):
         if not self._uses_shared_importance():
             return
@@ -801,3 +898,20 @@ class OLF(nn.Module):
             self.shared_param_importance_steps.zero_()
             self.shared_param_ready.fill_(True)
     ####################add-5.8-end#########################
+
+    ###########################add-5.14-shared_B_ema-start###########################
+    def _uses_shared_ema(self):
+        return self._uses_shared_core() and self.shared_ema_mode == "task_end"
+
+    def update_shared_ema(self):
+        if not self._uses_shared_ema():
+            return
+        with torch.no_grad():
+            if self.task_id == 0 or not bool(self.shared_ema_ready.item()):
+                self.shared_ema_B.copy_(self.B_shared.detach())
+                self.shared_ema_ready.fill_(True)
+                return
+            beta = min(max(float(self.shared_ema_beta), 0.0), 1.0)
+            self.shared_ema_B.mul_(beta).add_(self.B_shared.detach(), alpha=1.0 - beta)
+            self.B_shared.copy_(self.shared_ema_B)
+    ###########################add-5.14-shared_B_ema-end#############################

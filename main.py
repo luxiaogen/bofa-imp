@@ -118,6 +118,30 @@ def setup_parser():
     # parser.add_argument("--proto_select_tau", type=float, default=0.07,
     #                     help="Softmax temperature for text-guided top-k prototype selection.")
     ####################add-5.12-end###########################
+    ###########################add-5.13-care-moe-start###########################
+    parser.add_argument(
+        "--private_route_mode",
+        type=str,
+        default="none",
+        choices=["none", "task_topm"],
+        help="Sample-wise routing mode for historical B_private at evaluation time.",
+    )
+    parser.add_argument("--private_route_topm", type=int, default=1,
+                        help="Number of historical task-private branches selected per sample.")
+    parser.add_argument("--private_route_tau", type=float, default=1.0,
+                        help="Softmax temperature for sample-wise private-task routing.")
+    ###########################add-5.13-care-moe-end#############################
+    ###########################add-5.14-shared_B_ema-start###########################
+    parser.add_argument(
+        "--shared_ema_mode",
+        type=str,
+        default="none",
+        choices=["none", "task_end"],
+        help="Task-end EMA update mode for B_shared in fixed_svd_shared_core.",
+    )
+    parser.add_argument("--shared_ema_beta", type=float, default=0.9,
+                        help="EMA decay for task-end B_shared accumulation.")
+    ###########################add-5.14-shared_B_ema-end#############################
 
     return parser
 

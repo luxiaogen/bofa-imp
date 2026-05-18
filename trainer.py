@@ -49,6 +49,16 @@ def _build_run_tag(args, timestamp):
     if args.get("shared_importance_mode", "none") != "none":
         parts.append(args["shared_importance_mode"])
         parts.append("ia{}".format(_compact_float(args.get("importance_alpha", 1.0))))
+    ###########################add-5.13-care-moe-start###########################
+    if args.get("private_route_mode", "none") != "none":
+        parts.append("route{}".format(args["private_route_mode"]))
+        parts.append("m{}".format(args.get("private_route_topm", 1)))
+        parts.append("rtau{}".format(_compact_float(args.get("private_route_tau", 1.0))))
+    ###########################add-5.13-care-moe-end#############################
+    ###########################add-5.14-shared_B_ema-start###########################
+    if args.get("shared_ema_mode", "none") != "none":
+        parts.append("ema{}".format(_compact_float(args.get("shared_ema_beta", 0.9))))
+    ###########################add-5.14-shared_B_ema-end#############################
     return "_".join(parts)
 ####################add-5.12-end#######################
 
@@ -160,6 +170,13 @@ def _compute_b_summary(snapshot, previous_snapshot=None, eps=1e-8):
                 float(shared_param_importance.max().item()) if shared_param_importance.numel() > 0 else 0.0
             )
         ####################add-5.8-end#########################
+        ###########################add-5.14-shared_B_ema-start###########################
+        if "shared_ema_mode" in snapshot:
+            summary["shared_ema_mode"] = snapshot["shared_ema_mode"]
+            summary["shared_ema_beta"] = float(snapshot["shared_ema_beta"])
+            summary["shared_ema_ready"] = bool(snapshot["shared_ema_ready"])
+            summary["shared_ema_delta_norm"] = float(snapshot.get("shared_ema_delta_norm", 0.0))
+        ###########################add-5.14-shared_B_ema-end#############################
 
         # if previous_snapshot is not None and "B_shared" in previous_snapshot and "B_private" in previous_snapshot:
         if (
@@ -219,8 +236,8 @@ def _save_b_snapshot(model, analysis_dir, task_id, previous_snapshot=None):
     with open(summary_path, "w", encoding="utf-8") as f:
         json.dump(summary, f, indent=2)
 
-    logging.info("Saved B snapshot to %s", snapshot_path)
-    logging.info("B summary: %s", summary)
+    # logging.info("Saved B snapshot to %s", snapshot_path)
+    # logging.info("B summary: %s", summary)
     return snapshot, summary
 ##########add.5.4-vis-end######################
 def train(args):
@@ -333,7 +350,7 @@ def _train(args):
                 name,
                 sum(task_curve["top1"]) / len(task_curve["top1"]),
             )
-
+            logging.info("-------------------------------------------------------------------")
             logging.info("[Class Acc | %s] grouped: %s", name, acc["grouped"])
             class_curve["top1"].append(acc["top1"])
             logging.info("[Class Acc | %s] curve: %s", name, class_curve["top1"])
@@ -342,6 +359,7 @@ def _train(args):
                 name,
                 sum(class_curve["top1"]) / len(class_curve["top1"]),
             )
+            logging.info("####################################################################")
         ####################add-5.13-end###########################
 
 
