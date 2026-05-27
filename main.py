@@ -1,9 +1,10 @@
 import json
 import argparse
 from trainer import train
-# import wandb
+import wandb
 import os
 # from utils.wandb_utils import get_data_root_path, get_result_path
+import time
 
 
 
@@ -20,7 +21,7 @@ def main():
         os.makedirs(log_dir)
     print("Result Dir: {}".format(log_dir))
     # wandb.login(key="local-4e2ce713137197a03cbab2c3085d82a7518c1632", host="http://114.212.23.76:8080")
-    # wandb.init(project=param["project_name"], config=param, dir=log_dir,)
+    wandb.init(project=param["project_name"], name=time.strftime('%m%d%H%M%S'))
     param["model_name"] = "bofa"
     # param["out_dir"] = wandb.run.dir
     param["out_dir"] = log_dir  # 使用本地路径
@@ -46,7 +47,7 @@ def setup_parser():
     parser.add_argument('--sample_num', type=int, default=0, )
     # parser.add_argument('--Kt', type=int, default=256, help="Random seed.")
     parser.add_argument('--epoch', type=int, default=2, help="Random seed.")
-    parser.add_argument("--project_name", type=str, default="test",
+    parser.add_argument("--project_name", type=str, default="bofa_test",
                         help="Project name of wandb")
     parser.add_argument("--img_only", action="store_true", default=False)
     parser.add_argument("--loss_type", type=str, default="CE", help="Loss type.")
@@ -142,6 +143,15 @@ def setup_parser():
     parser.add_argument("--shared_ema_beta", type=float, default=0.9,
                         help="EMA decay for task-end B_shared accumulation.")
     ###########################add-5.14-shared_B_ema-end#############################
+
+    ###########################add-5.19-Text-guided hard negative margin-start#########################
+    parser.add_argument("--text_hard_neg_lambda", type=float, default=0.0,
+                        help="Strength for text-guided hard negative margin loss.")
+    parser.add_argument("--text_hard_neg_topk", type=int, default=5,
+                        help="Number of text-similar negative classes used by hard negative margin loss.")
+    parser.add_argument("--text_hard_neg_margin", type=float, default=0.1,
+                        help="Margin for text-guided hard negative loss.")
+    ###########################add-5.19-Text-guided hard negative margin-end###########################
 
     return parser
 

@@ -1,0 +1,58 @@
+{
+  "os":  "Linux-6.14.0-37-generic-x86_64-with-glibc2.41",
+  "python":  "CPython 3.9.25",
+  "startedAt":  "2026-05-27T09:05:44.349306Z",
+  "args":  [
+    "--config",
+    "exps/imagenetr_0_20.json",
+    "--subspace_policy",
+    "fixed_svd_shared_core",
+    "--basis_alloc",
+    "shared_core_private_block",
+    "--Kt",
+    "498",
+    "--shared_rank",
+    "468",
+    "--shared_importance_mode",
+    "column_grad_scale",
+    "--importance_beta",
+    "0.999",
+    "--importance_alpha",
+    "1.0"
+  ],
+  "program":  "/home/shengqin/lys/code/BOFA/main.py",
+  "codePath":  "main.py",
+  "codePathLocal":  "main.py",
+  "git":  {
+    "remote":  "git@github-luxiaogen:luxiaogen/bofa-imp.git",
+    "commit":  "5da38d107538b9fe0cf7bcba4aabec7c992fd372"
+  },
+  "email":  "luxiaogengen@hotmail.com",
+  "root":  "/home/shengqin/lys/code/BOFA",
+  "host":  "shengqin",
+  "executable":  "/home/shengqin/anaconda3/envs/bofa/bin/python",
+  "cpu_count":  20,
+  "cpu_count_logical":  28,
+  "gpu":  "NVIDIA GeForce RTX 3090 Ti",
+  "gpu_count":  1,
+  "disk":  {
+    "/":  {
+      "total":  "1094643585024",
+      "used":  "288305614848"
+    }
+  },
+  "memory":  {
+    "total":  "32872808448"
+  },
+  "gpu_nvidia":  [
+    {
+      "name":  "NVIDIA GeForce RTX 3090 Ti",
+      "memoryTotal":  "25757220864",
+      "cudaCores":  10752,
+      "architecture":  "Ampere",
+      "uuid":  "GPU-980ce4a3-6c17-b57d-ff2d-e43dbcd5c84a"
+    }
+  ],
+  "cudaVersion":  "12.8",
+  "writerId":  "sshw7lpfz789d59m6sssovcafqp2grr6"
+}

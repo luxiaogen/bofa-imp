@@ -2,6 +2,27 @@ import socket
 import os
 
 
+def init_wandb(args, log_dir):
+    if not args.get("use_wandb", False):
+        return None
+    try:
+        import wandb
+    except ImportError as exc:
+        raise ImportError("wandb is not installed. Run `pip install wandb` or remove `--use_wandb`.") from exc
+
+    wandb.init(project=args["project_name"], config=args, dir=log_dir)
+    return wandb.run
+
+
+def log_wandb(metrics):
+    try:
+        import wandb
+    except ImportError:
+        return
+    if wandb.run is not None:
+        wandb.log(metrics)
+
+
 def get_local_ip():
     try:
         # 创建一个UDP socket

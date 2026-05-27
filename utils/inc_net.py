@@ -313,6 +313,12 @@ class BofaAdapter(BaseNet):
 
         vecs = torch.cat(vecs) # [5000,768]
         #self.olf_layer.update_old_features(vecs) # 更新均值和协方差
+
+        ###########################add-5.18-subspace-energy-start#########################
+        self.olf_layer.update_task_second_moment(vecs)
+        ###########################add-5.18-subspace-energy-end###########################
+
+
         ####################add-4.27-start######################
         if self.olf_layer.uses_data_oss():
             self.olf_layer.update_old_features(vecs)

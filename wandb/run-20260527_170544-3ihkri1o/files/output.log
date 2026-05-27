@@ -1,0 +1,78 @@
+2026-05-27 17:05:46,961 [trainer.py] => prefix: -
+2026-05-27 17:05:46,961 [trainer.py] => dataset: imagenetr
+2026-05-27 17:05:46,962 [trainer.py] => shuffle: True
+2026-05-27 17:05:46,963 [trainer.py] => init_cls: 20
+2026-05-27 17:05:46,963 [trainer.py] => increment: 20
+2026-05-27 17:05:46,964 [trainer.py] => convnet_type: clip
+2026-05-27 17:05:46,964 [trainer.py] => device: [device(type='cuda', index=0)]
+2026-05-27 17:05:46,964 [trainer.py] => seed: 1993
+2026-05-27 17:05:46,965 [trainer.py] => projection_type: pure_mlp
+2026-05-27 17:05:46,965 [trainer.py] => frozen_layers: visual
+2026-05-27 17:05:46,966 [trainer.py] => tuned_epoch: 17
+2026-05-27 17:05:46,966 [trainer.py] => init_lr: 0.05
+2026-05-27 17:05:46,966 [trainer.py] => batch_size: 128
+2026-05-27 17:05:46,966 [trainer.py] => weight_decay: 0.05
+2026-05-27 17:05:46,967 [trainer.py] => min_lr: 0
+2026-05-27 17:05:46,967 [trainer.py] => optimizer: sgd
+2026-05-27 17:05:46,967 [trainer.py] => text_des: 2
+2026-05-27 17:05:46,967 [trainer.py] => image_aug: 2
+2026-05-27 17:05:46,967 [trainer.py] => stat: 0.0
+2026-05-27 17:05:46,968 [trainer.py] => config: exps/imagenetr_0_20.json
+2026-05-27 17:05:46,968 [trainer.py] => sample_num: 0
+2026-05-27 17:05:46,968 [trainer.py] => epoch: 2
+2026-05-27 17:05:46,968 [trainer.py] => project_name: bofa_test
+2026-05-27 17:05:46,968 [trainer.py] => img_only: False
+2026-05-27 17:05:46,968 [trainer.py] => loss_type: CE
+2026-05-27 17:05:46,969 [trainer.py] => center_type: mix
+2026-05-27 17:05:46,969 [trainer.py] => up_cen: 1
+2026-05-27 17:05:46,969 [trainer.py] => save_feat: 0
+2026-05-27 17:05:46,969 [trainer.py] => Kt: 498
+2026-05-27 17:05:46,970 [trainer.py] => subspace_policy: fixed_svd_shared_core
+2026-05-27 17:05:46,970 [trainer.py] => basis_seed: 1993
+2026-05-27 17:05:46,970 [trainer.py] => basis_alloc: shared_core_private_block
+2026-05-27 17:05:46,970 [trainer.py] => shared_rank: 468
+2026-05-27 17:05:46,970 [trainer.py] => shared_lr_scale: 0.1
+2026-05-27 17:05:46,971 [trainer.py] => first_task_rank: -1
+2026-05-27 17:05:46,971 [trainer.py] => shared_importance_mode: column_grad_scale
+2026-05-27 17:05:46,971 [trainer.py] => importance_beta: 0.999
+2026-05-27 17:05:46,971 [trainer.py] => importance_alpha: 1.0
+2026-05-27 17:05:46,971 [trainer.py] => shared_svd_reg_lambda: 0.0
+2026-05-27 17:05:46,972 [trainer.py] => shared_svd_reg_topk: 20
+2026-05-27 17:05:46,972 [trainer.py] => shared_svd_grad_mode: none
+2026-05-27 17:05:46,972 [trainer.py] => shared_param_reg_mode: none
+2026-05-27 17:05:46,972 [trainer.py] => shared_param_reg_lambda: 0.0
+2026-05-27 17:05:46,972 [trainer.py] => shared_param_importance_beta: 0.9
+2026-05-27 17:05:46,974 [trainer.py] => private_route_mode: none
+2026-05-27 17:05:46,975 [trainer.py] => private_route_topm: 1
+2026-05-27 17:05:46,975 [trainer.py] => private_route_tau: 1.0
+2026-05-27 17:05:46,975 [trainer.py] => shared_ema_mode: none
+2026-05-27 17:05:46,976 [trainer.py] => shared_ema_beta: 0.9
+2026-05-27 17:05:46,976 [trainer.py] => text_hard_neg_lambda: 0.0
+2026-05-27 17:05:46,976 [trainer.py] => text_hard_neg_topk: 5
+2026-05-27 17:05:46,976 [trainer.py] => text_hard_neg_margin: 0.1
+2026-05-27 17:05:46,977 [trainer.py] => model_name: bofa
+2026-05-27 17:05:46,977 [trainer.py] => out_dir: ./logs/bofa_test
+2026-05-27 17:05:46,977 [trainer.py] => use_up_cen: True
+2026-05-27 17:05:46,977 [trainer.py] => use_up_cov: True
+['goldfish', 'great_white_shark', 'hammerhead', 'stingray', 'hen', 'ostrich', 'goldfinch', 'junco', 'bald_eagle', 'vulture', 'newt', 'axolotl', 'tree_frog', 'iguana', 'African_chameleon', 'cobra', 'scorpion', 'tarantula', 'centipede', 'peacock', 'lorikeet', 'hummingbird', 'toucan', 'duck', 'goose', 'black_swan', 'koala', 'jellyfish', 'snail', 'lobster', 'hermit_crab', 'flamingo', 'american_egret', 'pelican', 'king_penguin', 'grey_whale', 'killer_whale', 'sea_lion', 'chihuahua', 'shih_tzu', 'afghan_hound', 'basset_hound', 'beagle', 'bloodhound', 'italian_greyhound', 'whippet', 'weimaraner', 'yorkshire_terrier', 'boston_terrier', 'scottish_terrier', 'west_highland_white_terrier', 'golden_retriever', 'labrador_retriever', 'cocker_spaniels', 'collie', 'border_collie', 'rottweiler', 'german_shepherd_dog', 'boxer', 'french_bulldog', 'saint_bernard', 'husky', 'dalmatian', 'pug', 'pomeranian', 'chow_chow', 'pembroke_welsh_corgi', 'toy_poodle', 'standard_poodle', 'timber_wolf', 'hyena', 'red_fox', 'tabby_cat', 'leopard', 'snow_leopard', 'lion', 'tiger', 'cheetah', 'polar_bear', 'meerkat', 'ladybug', 'fly', 'bee', 'ant', 'grasshopper', 'cockroach', 'mantis', 'dragonfly', 'monarch_butterfly', 'starfish', 'wood_rabbit', 'porcupine', 'fox_squirrel', 'beaver', 'guinea_pig', 'zebra', 'pig', 'hippopotamus', 'bison', 'gazelle', 'llama', 'skunk', 'badger', 'orangutan', 'gorilla', 'chimpanzee', 'gibbon', 'baboon', 'panda', 'eel', 'clown_fish', 'puffer_fish', 'accordion', 'ambulance', 'assault_rifle', 'backpack', 'barn', 'wheelbarrow', 'basketball', 'bathtub', 'lighthouse', 'beer_glass', 'binoculars', 'birdhouse', 'bow_tie', 'broom', 'bucket', 'cauldron', 'candle', 'cannon', 'canoe', 'carousel', 'castle', 'mobile_phone', 'cowboy_hat', 'electric_guitar', 'fire_engine', 'flute', 'gasmask', 'grand_piano', 'guillotine', 'hammer', 'harmonica', 'harp', 'hatchet', 'jeep', 'joystick', 'lab_coat', 'lawn_mower', 'lipstick', 'mailbox', 'missile', 'mitten', 'parachute', 'pickup_truck', 'pirate_ship', 'revolver', 'rugby_ball', 'sandal', 'saxophone', 'school_bus', 'schooner', 'shield', 'soccer_ball', 'space_shuttle', 'spider_web', 'steam_locomotive', 'scarf', 'submarine', 'tank', 'tennis_ball', 'tractor', 'trombone', 'vase', 'violin', 'military_aircraft', 'wine_bottle', 'ice_cream', 'bagel', 'pretzel', 'cheeseburger', 'hotdog', 'cabbage', 'broccoli', 'cucumber', 'bell_pepper', 'mushroom', 'Granny_Smith', 'strawberry', 'lemon', 'pineapple', 'banana', 'pomegranate', 'pizza', 'burrito', 'espresso', 'volcano', 'baseball_player', 'scuba_diver', 'acorn']
+['a good photo of a {}.', 'itap of a {}.', 'a bad photo of the {}.', 'a origami {}.', 'a photo of the large {}.', 'a {} in a video game.', 'art of the {}.', 'a photo of the small {}.']
+{'n01443537': 0, 'n01484850': 1, 'n01494475': 2, 'n01498041': 3, 'n01514859': 4, 'n01518878': 5, 'n01531178': 6, 'n01534433': 7, 'n01614925': 8, 'n01616318': 9, 'n01630670': 10, 'n01632777': 11, 'n01644373': 12, 'n01677366': 13, 'n01694178': 14, 'n01748264': 15, 'n01770393': 16, 'n01774750': 17, 'n01784675': 18, 'n01806143': 19, 'n01820546': 20, 'n01833805': 21, 'n01843383': 22, 'n01847000': 23, 'n01855672': 24, 'n01860187': 25, 'n01882714': 26, 'n01910747': 27, 'n01944390': 28, 'n01983481': 29, 'n01986214': 30, 'n02007558': 31, 'n02009912': 32, 'n02051845': 33, 'n02056570': 34, 'n02066245': 35, 'n02071294': 36, 'n02077923': 37, 'n02085620': 38, 'n02086240': 39, 'n02088094': 40, 'n02088238': 41, 'n02088364': 42, 'n02088466': 43, 'n02091032': 44, 'n02091134': 45, 'n02092339': 46, 'n02094433': 47, 'n02096585': 48, 'n02097298': 49, 'n02098286': 50, 'n02099601': 51, 'n02099712': 52, 'n02102318': 53, 'n02106030': 54, 'n02106166': 55, 'n02106550': 56, 'n02106662': 57, 'n02108089': 58, 'n02108915': 59, 'n02109525': 60, 'n02110185': 61, 'n02110341': 62, 'n02110958': 63, 'n02112018': 64, 'n02112137': 65, 'n02113023': 66, 'n02113624': 67, 'n02113799': 68, 'n02114367': 69, 'n02117135': 70, 'n02119022': 71, 'n02123045': 72, 'n02128385': 73, 'n02128757': 74, 'n02129165': 75, 'n02129604': 76, 'n02130308': 77, 'n02134084': 78, 'n02138441': 79, 'n02165456': 80, 'n02190166': 81, 'n02206856': 82, 'n02219486': 83, 'n02226429': 84, 'n02233338': 85, 'n02236044': 86, 'n02268443': 87, 'n02279972': 88, 'n02317335': 89, 'n02325366': 90, 'n02346627': 91, 'n02356798': 92, 'n02363005': 93, 'n02364673': 94, 'n02391049': 95, 'n02395406': 96, 'n02398521': 97, 'n02410509': 98, 'n02423022': 99, 'n02437616': 100, 'n02445715': 101, 'n02447366': 102, 'n02480495': 103, 'n02480855': 104, 'n02481823': 105, 'n02483362': 106, 'n02486410': 107, 'n02510455': 108, 'n02526121': 109, 'n02607072': 110, 'n02655020': 111, 'n02672831': 112, 'n02701002': 113, 'n02749479': 114, 'n02769748': 115, 'n02793495': 116, 'n02797295': 117, 'n02802426': 118, 'n02808440': 119, 'n02814860': 120, 'n02823750': 121, 'n02841315': 122, 'n02843684': 123, 'n02883205': 124, 'n02906734': 125, 'n02909870': 126, 'n02939185': 127, 'n02948072': 128, 'n02950826': 129, 'n02951358': 130, 'n02966193': 131, 'n02980441': 132, 'n02992529': 133, 'n03124170': 134, 'n03272010': 135, 'n03345487': 136, 'n03372029': 137, 'n03424325': 138, 'n03452741': 139, 'n03467068': 140, 'n03481172': 141, 'n03494278': 142, 'n03495258': 143, 'n03498962': 144, 'n03594945': 145, 'n03602883': 146, 'n03630383': 147, 'n03649909': 148, 'n03676483': 149, 'n03710193': 150, 'n03773504': 151, 'n03775071': 152, 'n03888257': 153, 'n03930630': 154, 'n03947888': 155, 'n04086273': 156, 'n04118538': 157, 'n04133789': 158, 'n04141076': 159, 'n04146614': 160, 'n04147183': 161, 'n04192698': 162, 'n04254680': 163, 'n04266014': 164, 'n04275548': 165, 'n04310018': 166, 'n04325704': 167, 'n04347754': 168, 'n04389033': 169, 'n04409515': 170, 'n04465501': 171, 'n04487394': 172, 'n04522168': 173, 'n04536866': 174, 'n04552348': 175, 'n04591713': 176, 'n07614500': 177, 'n07693725': 178, 'n07695742': 179, 'n07697313': 180, 'n07697537': 181, 'n07714571': 182, 'n07714990': 183, 'n07718472': 184, 'n07720875': 185, 'n07734744': 186, 'n07742313': 187, 'n07745940': 188, 'n07749582': 189, 'n07753275': 190, 'n07753592': 191, 'n07768694': 192, 'n07873807': 193, 'n07880968': 194, 'n07920052': 195, 'n09472597': 196, 'n09835506': 197, 'n10565667': 198, 'n12267677': 199}
+2026-05-27 17:05:47,107 [data_manager.py] => [168, 136, 51, 9, 183, 101, 171, 99, 42, 159, 191, 70, 16, 188, 27, 10, 175, 26, 68, 187, 98, 6, 85, 35, 112, 43, 100, 0, 103, 181, 88, 59, 4, 2, 116, 174, 94, 80, 106, 1, 147, 17, 141, 131, 72, 23, 173, 54, 197, 118, 87, 32, 79, 104, 91, 19, 135, 107, 178, 36, 11, 199, 142, 8, 122, 3, 28, 57, 153, 172, 190, 56, 49, 44, 97, 62, 151, 169, 194, 55, 192, 12, 189, 78, 66, 180, 15, 137, 109, 134, 92, 119, 126, 52, 170, 40, 148, 65, 144, 64, 138, 45, 77, 89, 154, 90, 71, 193, 74, 30, 113, 143, 96, 84, 67, 50, 186, 156, 69, 21, 18, 111, 108, 58, 125, 157, 150, 110, 182, 129, 166, 83, 81, 60, 13, 165, 14, 176, 63, 117, 5, 22, 145, 121, 38, 41, 82, 127, 114, 20, 31, 53, 37, 163, 196, 130, 152, 162, 86, 76, 24, 34, 184, 149, 33, 128, 198, 155, 146, 167, 139, 120, 140, 102, 47, 25, 158, 123, 46, 164, 61, 7, 115, 75, 133, 160, 105, 132, 179, 124, 48, 73, 93, 39, 95, 195, 29, 177, 185, 161]
+After shuffle, class_to_label is:  ['submarine', 'fire_engine', 'golden_retriever', 'vulture', 'broccoli', 'skunk', 'tractor', 'gazelle', 'beagle', 'saxophone', 'banana', 'hyena', 'scorpion', 'strawberry', 'jellyfish', 'newt', 'military_aircraft', 'koala', 'standard_poodle', 'Granny_Smith', 'bison', 'goldfinch', 'cockroach', 'grey_whale', 'accordion', 'bloodhound', 'llama', 'goldfish', 'orangutan', 'hotdog', 'monarch_butterfly', 'french_bulldog', 'hen', 'hammerhead', 'barn', 'violin', 'guinea_pig', 'ladybug', 'gibbon', 'great_white_shark', 'lab_coat', 'tarantula', 'hammer', 'carousel', 'tabby_cat', 'duck', 'vase', 'collie', 'baseball_player', 'basketball', 'dragonfly', 'american_egret', 'meerkat', 'gorilla', 'porcupine', 'peacock', 'electric_guitar', 'baboon', 'bagel', 'killer_whale', 'axolotl', 'acorn', 'harmonica', 'bald_eagle', 'binoculars', 'stingray', 'snail', 'german_shepherd_dog', 'parachute', 'trombone', 'pineapple', 'rottweiler', 'scottish_terrier', 'italian_greyhound', 'hippopotamus', 'dalmatian', 'missile', 'tank', 'burrito', 'border_collie', 'pomegranate', 'tree_frog', 'lemon', 'polar_bear', 'pembroke_welsh_corgi', 'cheeseburger', 'cobra', 'flute', 'eel', 'cowboy_hat', 'fox_squirrel', 'bathtub', 'bucket', 'labrador_retriever', 'tennis_ball', 'afghan_hound', 'lawn_mower', 'chow_chow', 'hatchet', 'pomeranian', 'gasmask', 'whippet', 'cheetah', 'starfish', 'pickup_truck', 'wood_rabbit', 'red_fox', 'pizza', 'snow_leopard', 'hermit_crab', 'ambulance', 'harp', 'pig', 'grasshopper', 'toy_poodle', 'west_highland_white_terrier', 'mushroom', 'revolver', 'timber_wolf', 'hummingbird', 'centipede', 'puffer_fish', 'panda', 'boxer', 'broom', 'rugby_ball', 'mailbox', 'clown_fish', 'cabbage', 'cannon', 'steam_locomotive', 'ant', 'fly', 'saint_bernard', 'iguana', 'spider_web', 'African_chameleon', 'wine_bottle', 'pug', 'wheelbarrow', 'ostrich', 'toucan', 'jeep', 'beer_glass', 'chihuahua', 'basset_hound', 'bee', 'cauldron', 'assault_rifle', 'lorikeet', 'flamingo', 'cocker_spaniels', 'sea_lion', 'soccer_ball', 'volcano', 'canoe', 'mitten', 'shield', 'mantis', 'tiger', 'goose', 'king_penguin', 'cucumber', 'lipstick', 'pelican', 'candle', 'scuba_diver', 'pirate_ship', 'joystick', 'scarf', 'grand_piano', 'lighthouse', 'guillotine', 'badger', 'yorkshire_terrier', 'black_swan', 'sandal', 'birdhouse', 'weimaraner', 'space_shuttle', 'husky', 'junco', 'backpack', 'lion', 'mobile_phone', 'school_bus', 'chimpanzee', 'castle', 'pretzel', 'bow_tie', 'boston_terrier', 'leopard', 'beaver', 'shih_tzu', 'zebra', 'espresso', 'lobster', 'ice_cream', 'bell_pepper', 'schooner']
+Training class stages: [20, 20, 20, 20, 20, 20, 20, 20, 20, 20]
+Using CLIP model as the backbone
+2026-05-27 17:05:47,441 [factory.py] => Parsing model identifier. Schema: None, Identifier: ViT-B-16
+2026-05-27 17:05:47,441 [factory.py] => Loaded built-in ViT-B-16 model config.
+2026-05-27 17:05:48,021 [_client.py] => HTTP Request: HEAD https://hf-mirror.com/timm/vit_base_patch16_clip_224.laion400m_e32/resolve/main/open_clip_model.safetensors "HTTP/1.1 308 Permanent Redirect"
+2026-05-27 17:05:48,022 [factory.py] => Instantiating model architecture: CLIP
+2026-05-27 17:05:48,663 [factory.py] => Loading full pretrained weights from: cache_dir/models--timm--vit_base_patch16_clip_224.laion400m_e32/snapshots/f07dd91aded299f886ab2e484b7fb84de65fc46d/open_clip_model.safetensors
+2026-05-27 17:05:48,706 [factory.py] => Final image preprocessing configuration set: {'size': (224, 224), 'mode': 'RGB', 'mean': (0.48145466, 0.4578275, 0.40821073), 'std': (0.26862954, 0.26130258, 0.27577711), 'interpolation': 'bicubic', 'resize_mode': 'shortest', 'fill_color': 0}
+2026-05-27 17:05:48,706 [factory.py] => Model ViT-B-16 creation process complete.
+2026-05-27 17:05:48,706 [factory.py] => Parsing tokenizer identifier. Schema: None, Identifier: ViT-B-16
+2026-05-27 17:05:48,706 [factory.py] => Attempting to load config from built-in: ViT-B-16
+2026-05-27 17:05:48,706 [factory.py] => Using default SimpleTokenizer.
+last_mask not in args, set to False  as default
+2026-05-27 17:05:48,886 [trainer.py] => All params: 150523905
+2026-05-27 17:05:48,887 [trainer.py] => Trainable params: 509952
+2026-05-27 17:05:48,887 [bofa.py] => Learning on 0-20
+updating stat

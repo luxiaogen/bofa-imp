@@ -258,6 +258,16 @@ class OLF(nn.Module):
         self.register_buffer('shared_ema_ready', torch.tensor(False, device=self.W0.device))
         ###########################add-5.14-shared_B_ema-end#############################
 
+        ###########################add-5.18-subspace-energy-start#########################
+        self.register_buffer('current_task_second_moment',
+                             torch.zeros(self.in_features, self.in_features, device=self.W0.device))
+        self.register_buffer('previous_task_second_moment',
+                             torch.zeros(self.in_features, self.in_features, device=self.W0.device))
+        self.register_buffer('previous_task_second_moment_ready', torch.tensor(False, device=self.W0.device))
+        self.subspace_energy_diagnostics = {}
+        ###########################add-5.18-subspace-energy-end###########################
+
+
         self.W_task.requires_grad = False  # 初始时冻结
         self.W_fusion = W0_torch.clone().detach() # [512,768] mean(所有任务权重)
         self.W_fusion2 = W0_torch.clone().detach() # mean(所有任务权重 + 原始CLIP权重)      # 包含CLIP
@@ -362,6 +372,65 @@ class OLF(nn.Module):
         reg = 1e-4 * torch.eye(self.in_features, device=self.W0.device) # 加正则化 防止矩阵奇异(矩阵不可逆，行列式为 0)
         # 可以安全地求逆了 cov_inv = torch.inverse(cov_reg)
         self.cov_matrices.append((cov + reg).detach())
+
+    ###########################add-5.18-subspace-energy-start#########################
+    def update_task_second_moment(self, features):
+        with torch.no_grad():
+            x = features.detach().to(device=self.W0.device, dtype=self.W0.dtype)
+            denom = max(int(x.shape[0]), 1)
+            second_moment = (x.T @ x) / denom
+            self.current_task_second_moment.copy_(second_moment)
+
+    def _basis_energy(self, basis, moment):
+        if basis.numel() == 0:
+            return basis.new_tensor(0.0)
+        return torch.trace(basis.T @ moment @ basis)
+
+    def _update_subspace_energy_diagnostics(self):
+        if not self._uses_shared_core():
+            return
+        with torch.no_grad():
+            eps = self.importance_eps
+            cur = self.current_task_second_moment
+            prev = self.previous_task_second_moment
+            prev_ready = bool(self.previous_task_second_moment_ready.item())
+
+            shared_cur = self._basis_energy(self.shared_basis_block, cur)
+            shared_prev = self._basis_energy(self.shared_basis_block, prev) if prev_ready else cur.new_tensor(0.0)
+            private_cur = self._basis_energy(self.private_basis_block, cur)
+            private_prev = self._basis_energy(self.private_basis_block, prev) if prev_ready else cur.new_tensor(0.0)
+
+            cur_trace = torch.trace(cur).clamp_min(eps)
+            prev_trace = torch.trace(prev).clamp_min(eps) if prev_ready else cur.new_tensor(1.0)
+            self.subspace_energy_diagnostics = {
+                "has_previous_task_moment": prev_ready,
+                "shared_cur_energy": float(shared_cur.item()),
+                "shared_prev_energy": float(shared_prev.item()),
+                "private_cur_energy": float(private_cur.item()),
+                "private_prev_energy": float(private_prev.item()),
+                "shared_cur_energy_ratio": float((shared_cur / cur_trace).item()),
+                "shared_prev_energy_ratio": float((shared_prev / prev_trace).item()) if prev_ready else 0.0,
+                "private_cur_energy_ratio": float((private_cur / cur_trace).item()),
+                "private_prev_energy_ratio": float((private_prev / prev_trace).item()) if prev_ready else 0.0,
+                "private_cur_prev_energy_ratio": float(
+                    (private_cur / (private_prev + eps)).item()) if prev_ready else 0.0,
+                "shared_cur_prev_energy_ratio": float(
+                    (shared_cur / (shared_prev + eps)).item()) if prev_ready else 0.0,
+            }
+
+    def _commit_current_second_moment(self):
+        with torch.no_grad():
+            if self.task_id == 0 or not bool(self.previous_task_second_moment_ready.item()):
+                self.previous_task_second_moment.copy_(self.current_task_second_moment)
+                self.previous_task_second_moment_ready.fill_(True)
+                return
+            # Keep an average over tasks, not over samples. This is for diagnostics only.
+            self.previous_task_second_moment.mul_(self.task_id / (self.task_id + 1.0)).add_(
+                self.current_task_second_moment,
+                alpha=1.0 / (self.task_id + 1.0),
+            )
+    ###########################add-5.18-subspace-energy-end###########################
+
     # 任务 1+ (后续任务)
     def prepare_for_new_task(self):
 
@@ -480,6 +549,10 @@ class OLF(nn.Module):
         self.update_shared_param_importance() # EWC importance   [512,468]
         ####################add-5.8-end#########################
 
+        ###########################add-5.18-subspace-energy-start#########################
+        self._commit_current_second_moment()
+        ###########################add-5.18-subspace-energy-end###########################
+
         self.task_id += 1
         # self.current_rank += self.rank
         self.current_rank += self.active_rank # mod-5.3
@@ -582,6 +655,12 @@ class OLF(nn.Module):
             self.A.copy_(torch.cat((self.shared_basis_block, self.private_basis_block), dim=1)) # [768,32(共享的)+32(私有的)]
             self.active_rank = self.shared_rank + self.private_rank #  截止到当前任务需要激活的秩  468+30
             self.active_slice = (0, self.shared_rank, private_start, private_end)
+
+            ###########################add-5.18-subspace-energy-start#########################
+            self._update_subspace_energy_diagnostics()
+            ###########################add-5.18-subspace-energy-end###########################
+
+
             return self.active_slice
         ####################add-4.28-end########################
         # start = self.task_id * self.rank
@@ -713,6 +792,9 @@ class OLF(nn.Module):
                         torch.norm(self.B_shared.detach() - self.shared_ema_B.detach(), p="fro").item()
                     ) if bool(self.shared_ema_ready.item()) else 0.0,
                     ###########################add-5.14-shared_B_ema-end#############################
+                    ###########################add-5.18-subspace-energy-start#########################
+                    "subspace_energy_diagnostics": dict(self.subspace_energy_diagnostics),
+                    ###########################add-5.18-subspace-energy-end###########################
                 }
             )
         else:

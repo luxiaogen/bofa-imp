@@ -9,6 +9,7 @@ from utils.inc_net import BofaAdapter
 from models.base import BaseLearner
 from utils.toolkit import tensor2numpy, get_attribute
 import random
+from utils.wandb_utils import log_wandb
 random.seed(1993)
 np.random.seed(1993)
 
@@ -43,6 +44,11 @@ class Learner(BaseLearner):
         # self.proto_select_topk = get_attribute(args, "proto_select_topk", 0)
         # self.proto_select_tau = get_attribute(args, "proto_select_tau", 0.07)
         ####################add-5.12-end###########################
+        ###########################add-5.19-Text-guided hard negative margin-start#########################
+        self.text_hard_neg_lambda = get_attribute(args, "text_hard_neg_lambda", 0.0)
+        self.text_hard_neg_topk = get_attribute(args, "text_hard_neg_topk", 5)
+        self.text_hard_neg_margin = get_attribute(args, "text_hard_neg_margin", 0.1)
+        ###########################add-5.19-Text-guided hard negative margin-end###########################
         self.t_lam = 0
         self.stat = args['stat']
         self.label2task = []
@@ -73,12 +79,24 @@ class Learner(BaseLearner):
     #
     #     topk = min(int(self.proto_select_topk), img_proto.shape[0])
     #     tau = max(float(self.proto_select_tau), 1e-6) # 温度
-    #     sim = text_proto @ img_proto.t() # [20,20] 第 i 个文本原型 和 第 j 个图像原型 有多像
-    #     topk_values, topk_indices = torch.topk(sim, k=topk, dim=1) #
+    #     sim = text_proto @ img_proto.t() # [20,20]   [20,512]@[512,20] 第 i 个文本原型 和 第 j 个图像原型 有多像
+        # 筛选相似度最高的前 K 个图像：
+        # topk_values:  Shape = [C, K]  (最相似的 K 个相似度分数)
+        # topk_indices: Shape = [C, K]  (最相似的 K 个图像的类别索引)
+
+    #     topk_values, topk_indices = torch.topk(sim, k=topk, dim=1) # [20,20]
     #     topk_weight = torch.softmax(topk_values / tau, dim=1) # [C=20,topk=3]
-    #     selected_img_proto = img_proto[topk_indices] # [C=20,topk=3,512]  语义邻居融合 图像与文本最相近的 topk 个图像原型
+    # 提取对应的邻居图像特征：
+    # 根据 Shape 为 [C, K] 的索引从 [C, D] 中取值，得到 Shape = [C, K, D]
+    # 第一维 C：是因为有 C 个类别（外层循环 C 次）。
+    # 第二维 K：是因为对于每个类别，我们挑出了 K 个最相似的邻居（内层循环 K 次）。
+    # 第三维 D：是因为每一个邻居图像的特征向量长度是 D。
+    #     selected_img_proto = img_proto[topk_indices] # [20,topk=3,512]  语义邻居融合 图像与文本最相近的 topk 个图像原型
     #
     #     if self.proto_select_mode == "topk_image_then_mix":
+                # topk_weight.unsqueeze(-1) 的 Shape = [C, K, 1]
+                # 广播乘法：[C, K, 1] * [C, K, D] -> [C, K, D]
+                # 在维度 1 (K) 上求和：Shape = [C, D]
     #         selective_img_proto = (topk_weight.unsqueeze(-1) * selected_img_proto).sum(dim=1) # [20,512]
     #         selective_img_proto = self._normalize_proto(selective_img_proto)
     #         return lam * selective_img_proto + (1 - lam) * text_proto
@@ -113,6 +131,47 @@ class Learner(BaseLearner):
             return text_proto
         return self.t_lam * img_proto + (1 - self.t_lam) * text_proto
     ###########################add-5.13-care-moe-end#############################
+
+    ###########################add-5.19-Text-guided hard negative margin-start#########################
+    def _text_guided_margin_loss(self, logits, targets, text_proto):
+        if self.text_hard_neg_lambda <= 0 or self.text_hard_neg_topk <= 0:
+            return logits.new_zeros(())
+
+        num_classes = logits.shape[1]
+        if num_classes <= 1:
+            return logits.new_zeros(())
+
+        valid_mask = (targets >= 0) & (targets < num_classes)
+        if not torch.any(valid_mask):
+            return logits.new_zeros(())
+        # -------- 第 1 步：利用文本特征寻找“难负样本类” --------
+        with torch.no_grad():
+            text_proto = self._normalize_proto(text_proto[:num_classes].detach())
+            text_sim = text_proto @ text_proto.t()
+            text_sim.fill_diagonal_(-float("inf")) # 对角线填充为负无穷，避免把“当前类自己”当成最高相似度的负样本
+            hard_k = min(int(self.text_hard_neg_topk), num_classes - 1) # hard_k: 要取几个最难的负样本类
+            # [num_classes, hard_k]
+            hard_neg_indices = torch.topk(text_sim, k=hard_k, dim=1).indices #
+        # -------- 第 2 步：提取当前 Batch 的预测分数 --------
+        # 假设当前 batch 有 V 个合法的样本
+        valid_targets = targets[valid_mask].long()
+        valid_logits = logits[valid_mask] # Shape: [V, num_classes]
+        # 提取模型对“正确类别”的预测分数 (Positive Logits)
+        # pos_logits Shape: [V, 1]
+        pos_logits = valid_logits.gather(1, valid_targets.unsqueeze(1))
+        # 对于每个样本的 GT 类别，查表获取它对应的 k 个“难负样本”类别索引
+        # neg_indices Shape: [V, hard_k]
+        neg_indices = hard_neg_indices[valid_targets]
+        # 提取模型对这 k 个“难负样本类”的预测分数 (Negative Logits)
+        # neg_logits Shape: [V, hard_k]
+        neg_logits = valid_logits.gather(1, neg_indices)
+        # -------- 第 3 步：计算 Margin Loss --------
+        margin = float(self.text_hard_neg_margin)
+        # ReLU( margin + neg - pos )
+        # 物理意义：如果你对难负样本类的预测分数 (neg) 加上 margin，依然比正样本的分数 (pos) 小，
+        # 说明模型分得很开，Loss = 0。反之，产生惩罚。
+        return torch.relu(margin + neg_logits - pos_logits).mean()
+    ###########################add-5.19-Text-guided hard negative margin-end###########################
 
     def incremental_train(self, data_manager):
         self._cur_task += 1
@@ -320,6 +379,10 @@ class Learner(BaseLearner):
                     # cls_proto = self._build_cls_proto(img_proto, text_proto) # add-5.12
                     logits = self._network.model.logit_scale * img_feas @ cls_proto.t() # [128,512]@[10,512]
                     clip_loss = nn.functional.cross_entropy(logits, targets) # 交叉熵，图像特征和类别原型的相似度 logits
+                    ###########################add-5.19-Text-guided hard negative margin-start#########################
+                    hard_neg_loss = self._text_guided_margin_loss(logits, targets, text_proto)
+                    clip_loss = clip_loss + self.text_hard_neg_lambda * hard_neg_loss
+                    ###########################add-5.19-Text-guided hard negative margin-end###########################
                 else:
                     labels = [class_to_label[y] for y in targets]
                     texts_clip = [templates.format(inst) for inst in labels]
@@ -374,6 +437,15 @@ class Learner(BaseLearner):
 
             logging.info(info)
             prog_bar.set_description(info)
+            log_wandb({
+                "train/task": self._cur_task,
+                "train/epoch": epoch + 1,
+                "train/global_epoch": self._cur_task * total_epochs + epoch + 1,
+                "train/loss": losses / len(train_loader),
+                "train/loss_clip": loss_clip / len(train_loader),
+                "train/loss_low": loss_low / len(train_loader),
+                "train/acc": float(train_acc),
+            })
 
     def _compute_accuracy(self, model, loader, epoch=0):
         class_to_label = self.data_manager._class_to_label

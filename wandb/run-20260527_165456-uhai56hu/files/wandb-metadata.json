@@ -1,0 +1,35 @@
+{
+  "os":  "Linux-6.14.0-37-generic-x86_64-with-glibc2.41",
+  "python":  "CPython 3.9.25",
+  "startedAt":  "2026-05-27T08:54:56.080420Z",
+  "args":  [
+    "--config",
+    "exps/imagenetr_0_20.json",
+    "--subspace_policy",
+    "fixed_svd_shared_core",
+    "--basis_alloc",
+    "shared_core_private_block",
+    "--Kt",
+    "498",
+    "--shared_rank",
+    "468",
+    "--shared_importance_mode",
+    "column_grad_scale",
+    "--importance_beta",
+    "0.999",
+    "--importance_alpha",
+    "1.0"
+  ],
+  "program":  "/home/shengqin/lys/code/BOFA/main.py",
+  "codePath":  "main.py",
+  "codePathLocal":  "main.py",
+  "git":  {
+    "remote":  "git@github-luxiaogen:luxiaogen/bofa-imp.git",
+    "commit":  "5da38d107538b9fe0cf7bcba4aabec7c992fd372"
+  },
+  "email":  "luxiaogengen@hotmail.com",
+  "root":  "/home/shengqin/lys/code/BOFA",
+  "host":  "shengqin",
+  "executable":  "/home/shengqin/anaconda3/envs/bofa/bin/python",
+  "writerId":  "grk8gnehe606brn8r7i2yf6c944jtmip"
+}

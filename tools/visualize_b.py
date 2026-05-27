@@ -167,6 +167,54 @@ def plot_update_ratio(task_ids, shared_deltas, private_deltas, output_path):
     plt.savefig(output_path, dpi=200)
     plt.close()
 
+def plot_subspace_energy_diagnostics(snapshots, task_ids, output_dir):
+    diagnostics = [snapshot.get("subspace_energy_diagnostics", {}) for snapshot in snapshots]
+    if not any(diagnostics):
+        return {}
+
+    def series(key):
+        return [float(diag.get(key, 0.0)) for diag in diagnostics]
+
+    shared_cur = series("shared_cur_energy_ratio")
+    private_cur = series("private_cur_energy_ratio")
+    shared_prev = series("shared_prev_energy_ratio")
+    private_prev = series("private_prev_energy_ratio")
+    shared_cur_prev = series("shared_cur_prev_energy_ratio")
+    private_cur_prev = series("private_cur_prev_energy_ratio")
+
+    plot_line(
+        task_ids,
+        [shared_cur, private_cur],
+        ["shared/current", "private/current"],
+        "Energy / trace(S_cur)",
+        "Current Task Projection Energy Ratio",
+        os.path.join(output_dir, "diagnostic_current_subspace_energy_ratio.png"),
+    )
+    plot_line(
+        task_ids,
+        [shared_prev, private_prev],
+        ["shared/previous", "private/previous"],
+        "Energy / trace(S_prev)",
+        "Previous Task Projection Energy Ratio",
+        os.path.join(output_dir, "diagnostic_previous_subspace_energy_ratio.png"),
+    )
+    plot_line(
+        task_ids,
+        [shared_cur_prev, private_cur_prev],
+        ["shared cur/prev", "private cur/prev"],
+        "Current / previous energy",
+        "Task-Contrast Projection Energy Ratio",
+        os.path.join(output_dir, "diagnostic_subspace_cur_prev_energy_ratio.png"),
+    )
+
+    return {
+        "subspace_shared_cur_energy_ratio": shared_cur,
+        "subspace_private_cur_energy_ratio": private_cur,
+        "subspace_shared_prev_energy_ratio": shared_prev,
+        "subspace_private_prev_energy_ratio": private_prev,
+        "subspace_shared_cur_prev_energy_ratio": shared_cur_prev,
+        "subspace_private_cur_prev_energy_ratio": private_cur_prev,
+    }
 
 def plot_effective_rank(task_ids, arrays_by_name, output_path):
     plt.figure(figsize=(8, 4))
@@ -936,6 +984,7 @@ def analyze_shared_core(snapshots, output_dir, with_svd=True):
     metrics.update(plot_protected_subspace_drift(snapshots, B_shared_list, output_dir))
     metrics.update(plot_ewc_importance_diagnostics(snapshots, B_shared_list, output_dir))
 
+    metrics.update(plot_subspace_energy_diagnostics(snapshots, task_ids, output_dir))
     plot_heatmap(
         padded_col_norm_matrix(B_shared_list),
         "B_shared Column Norm Heatmap",

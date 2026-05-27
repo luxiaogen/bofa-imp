@@ -9,7 +9,8 @@ import os
 import random
 import numpy as np
 import json
-# import wandb
+import wandb
+from utils.wandb_utils import log_wandb
 from datetime import datetime
 
 ####################add-5.12-start#######################
@@ -37,6 +38,14 @@ def _build_run_tag(args, timestamp):
         parts.append("ct{}".format(args["center_type"]))
     if args.get("text_relation_lambda", 0.0) > 0:
         parts.append("rel{}".format(_compact_float(args["text_relation_lambda"])))
+
+    ###########################add-5.19-Text-guided hard negative margin-start#########################
+    if args.get("text_hard_neg_lambda", 0.0) > 0:
+        parts.append("thn{}".format(_compact_float(args["text_hard_neg_lambda"])))
+        parts.append("hk{}".format(args.get("text_hard_neg_topk", 5)))
+        parts.append("hm{}".format(_compact_float(args.get("text_hard_neg_margin", 0.1))))
+    ###########################add-5.19-Text-guided hard negative margin-end###########################
+
     if args.get("shared_svd_reg_lambda", 0.0) > 0:
         parts.append("svdl{}".format(_compact_float(args["shared_svd_reg_lambda"])))
         parts.append("top{}".format(args.get("shared_svd_reg_topk", 20)))
@@ -140,6 +149,12 @@ def _compute_b_summary(snapshot, previous_snapshot=None, eps=1e-8):
                 shared_grad_scale.min().item()) if shared_grad_scale.numel() > 0 else 0.0
         if "shared_importance_mode" in snapshot:
             summary["shared_importance_mode"] = snapshot["shared_importance_mode"]
+
+        ###########################add-5.18-subspace-energy-start#########################
+        if "subspace_energy_diagnostics" in snapshot:
+            summary["subspace_energy_diagnostics"] = snapshot["subspace_energy_diagnostics"]
+        ###########################add-5.18-subspace-energy-end###########################
+
         ####################add-5.5-end######################
         ####################add-5.7-start######################
         if "shared_svd_reg_lambda" in snapshot:
@@ -423,12 +438,23 @@ def _train(args):
         #            "top2_avg": sum(top2_curve["top1"]) / len(top2_curve["top1"]),
         #            "gda_top1_avg": sum(top1_gda_curve["top1"]) / len(top1_gda_curve["top1"]),
         #            "gda_top2_avg": sum(top2_gda_curve["top1"]) / len(top2_gda_curve["top1"]),
-        #            "max_top1": cnn_accy[4]["top1"],
-        #            "max2_top1": cnn_accy[5]["top1"],
-        #            "max_top1_avg": sum(max_curve["top1"]) / len(max_curve["top1"]),
-        #            "max2_top1_avg": sum(max2_curve["top1"]) / len(max2_curve["top1"]),
         #            })
-
+        wandb_metrics = {"eval/task": task}
+        for name, acc, class_curve, task_curve in eval_items:
+            wandb_metrics.update({
+                "eval/{}/class_top1".format(name): acc["top1"],
+                "eval/{}/class_top1_avg".format(name): sum(class_curve["top1"]) / len(class_curve["top1"]),
+                "eval/{}/task_top1".format(name): acc["task_top1"],
+                "eval/{}/task_top1_avg".format(name): sum(task_curve["top1"]) / len(task_curve["top1"]),
+            })
+        if zs_seen is not None:
+            wandb_metrics.update({
+                "eval/zero_shot_seen": zs_seen,
+                "eval/zero_shot_unseen": zs_unseen,
+                "eval/zero_shot_harmonic": zs_harmonic,
+                "eval/zero_shot_total": zs_total,
+            })
+        log_wandb(wandb_metrics)
 
 def _set_device(args):
     device_type = args["device"]
